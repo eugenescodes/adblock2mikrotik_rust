@@ -1,0 +1,46 @@
+name: Update Converted Hosts
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: 0 */6 * * *  # Runs every 6 hours
+  workflow_dispatch:     # Allows for manual run of the workflow
+
+jobs:
+  update-hosts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: cargo build --release
+        # install dependencies managed outside of cargo here
+
+      - name: Run conversion script
+        run: ./target/release/convert_to_hosts  # based on your binary name
+
+      - name: Check for changes
+        id: check-for-changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add hosts.txt
+            git commit -m "Update hosts.txt"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit."
+          fi
+
+      - name: Push changes
+        if: steps.check-for-changes.outputs.changed == 'true'
+        run: git push
