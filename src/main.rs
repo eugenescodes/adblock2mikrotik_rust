@@ -87,7 +87,7 @@ async fn main() -> io::Result<()> {
 # Last modified: {}
 #  
 # Sources:
-# - AdGuard DNS filter
+# 
 # - Hagezi DNS blocklist for syntax adblock
 #
 # Format: 0.0.0.0 domain.tld
