@@ -68,8 +68,8 @@ async fn main() -> io::Result<()> {
     println!("Starting adblock rules conversion...");
 
     let urls = vec![
-        "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
     ];
 
     let mut unique_rules = HashSet::new();
