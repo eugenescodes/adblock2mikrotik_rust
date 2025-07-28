@@ -118,11 +118,10 @@ async fn main() -> io::Result<()> {
 # Homepage: https://github.com/eugenescodes/adblock2mikrotik
 # License: https://github.com/eugenescodes/adblock2mikrotik/blob/main/LICENSE
 #
-# Last modified: {}
+# Last modified: {current_time}
 #
 # Convert to format: 0.0.0.0 domain.tld
-"#,
-        current_time
+"#
     );
     for ((url, fetched_count), (_, converted_count)) in fetch_stats.iter().zip(source_stats.iter())
     {
