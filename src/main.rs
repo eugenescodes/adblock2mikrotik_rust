@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 
 async fn fetch_rules(url: &str) -> Result<Vec<String>, reqwest::Error> {
-    println!("Fetching rules from: {}", url);
+    println!("Fetching rules from: {url}");
     let client = reqwest::Client::new();
     let response = client
         .get(url)
@@ -29,7 +29,7 @@ fn convert_rule(rule: &str) -> Option<String> {
     let comment_re = match Regex::new(r"#.*$") {
         Ok(re) => re,
         Err(e) => {
-            eprintln!("Failed to create regex: {}", e);
+            eprintln!("Failed to create regex: {e}");
             return None;
         }
     };
@@ -52,18 +52,19 @@ fn convert_rule(rule: &str) -> Option<String> {
         let domain_re = match Regex::new(r"^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$") {
             Ok(re) => re,
             Err(e) => {
-                eprintln!("Failed to create regex: {}", e);
+                eprintln!("Failed to create regex: {e}");
                 return None;
             }
         };
         if domain_re.is_match(domain) {
-            return Some(format!("0.0.0.0 {}", domain));
+            return Some(format!("0.0.0.0 {domain}"));
         }
     }
     None
 }
 
 #[tokio::main]
+
 async fn main() -> io::Result<()> {
     println!("Starting adblock rules conversion...");
 
@@ -76,29 +77,65 @@ async fn main() -> io::Result<()> {
 
     // Write header with timestamp
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
-    println!("Current time: {}", current_time);
+    println!("Current time: {current_time}");
 
-    let header = format!(
+    let mut source_stats = Vec::new();
+    let mut rules_by_source = Vec::new();
+
+    let mut fetch_stats = Vec::new();
+    for url in &urls {
+        let rules = fetch_rules(url).await.unwrap_or_else(|_| vec![]);
+        let mut converted_count = 0;
+        let mut converted_rules = Vec::new();
+        let total_rules = rules.len();
+
+        println!("Processing rules from: {url}");
+
+        for (index, rule) in rules.iter().enumerate() {
+            if index % 1000 == 0 && index > 0 {
+                println!("Processed {index}/{total_rules} rules...");
+            }
+            if let Some(converted) = convert_rule(rule) {
+                if unique_rules.insert(converted.clone()) {
+                    converted_rules.push(converted);
+                    converted_count += 1;
+                }
+            }
+        }
+
+        println!("Finished processing source: {url}");
+        println!("Converted {converted_count} rules from this source");
+        fetch_stats.push(((*url).to_string(), total_rules));
+        source_stats.push(((*url).to_string(), converted_count));
+        rules_by_source.push(((*url).to_string(), converted_rules));
+    }
+    let total_unique = unique_rules.len();
+
+    // Build header with all stats and info at the top
+    let mut header = format!(
         r#"# Title: This filter compiled from trusted, verified sources and optimized for compatibility with DNS-level ad blocking by merging and simplifying multiple filters
 #
 # Homepage: https://github.com/eugenescodes/adblock2mikrotik
 # License: https://github.com/eugenescodes/adblock2mikrotik/blob/main/LICENSE
 #
 # Last modified: {}
-#  
-# Sources:
-# 
-# - Hagezi DNS blocklist for syntax adblock
 #
-# Format: 0.0.0.0 domain.tld
-#
+# Convert to format: 0.0.0.0 domain.tld
 "#,
         current_time
     );
+    for ((url, fetched_count), (_, converted_count)) in fetch_stats.iter().zip(source_stats.iter())
+    {
+        header.push_str(&format!("#\n# Source: {url}\n"));
+        header.push_str(&format!("# Successfully fetched {fetched_count} domains\n"));
+        header.push_str(&format!(
+            "# Converted {converted_count} domains from this source\n"
+        ));
+    }
+    header.push_str(&format!("#\n# Total unique: {total_unique} domains\n#\n"));
 
-    println!("Creating output file: hosts.txt");
     let file = File::create("hosts.txt").map_err(|e| {
-        eprintln!("Failed to create file: {}", e);
+        eprintln!("Failed to create file: {e}");
         e
     })?;
     let mut writer = BufWriter::new(file);
@@ -106,41 +143,11 @@ async fn main() -> io::Result<()> {
     writer.write_all(header.as_bytes())?;
     println!("Header written successfully");
 
-    for url in urls {
-        writeln!(writer, "\n# Source: {}\n", url)?;
-        let rules = fetch_rules(url).await.unwrap_or_else(|_| vec![]);
-        let mut converted_count = 0;
-        let total_rules = rules.len();
-
-        println!("Processing rules from: {}", url);
-
-        for (index, rule) in rules.iter().enumerate() {
-            if index % 1000 == 0 && index > 0 {
-                println!("Processed {}/{} rules...", index, total_rules);
-            }
-
-            if let Some(converted) = convert_rule(rule) {
-                if unique_rules.insert(converted.clone()) {
-                    writeln!(writer, "{}", converted)?;
-                    converted_count += 1;
-                }
-            }
+    for (_url, rules) in &rules_by_source {
+        for rule in rules {
+            writeln!(writer, "{rule}")?;
         }
-
-        println!("Finished processing source: {}", url);
-        println!("Converted {} rules from this source", converted_count);
-
-        writeln!(
-            writer,
-            "\n# Converted {} rules from this source\n",
-            converted_count
-        )?;
     }
-
-    // Write total count at the end
-    let total_unique = unique_rules.len();
-    println!("Total unique domains processed: {}", total_unique);
-    writeln!(writer, "\n# Total unique domains: {}\n", total_unique)?;
 
     // Ensure all buffered data is written to the file
     writer.flush()?;
