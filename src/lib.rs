@@ -42,13 +42,14 @@ pub fn convert_rule(rule: &str) -> Option<String> {
             .next()
             .unwrap_or("");
         // Basic domain validation
-        let domain_re = match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
-            Ok(re) => re,
-            Err(e) => {
-                eprintln!("Failed to create regex: {e}");
-                return None;
-            }
-        };
+        let domain_re =
+            match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
+                Ok(re) => re,
+                Err(e) => {
+                    eprintln!("Failed to create regex: {e}");
+                    return None;
+                }
+            };
         if domain_re.is_match(domain) {
             return Some(format!("0.0.0.0 {domain}"));
         }
@@ -58,12 +59,54 @@ pub fn convert_rule(rule: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_convert_rule_domain_with_dash() {
+        let rule = "||my-domain.com^";
+        assert_eq!(
+            convert_rule(rule),
+            Some("0.0.0.0 my-domain.com".to_string())
+        );
+    }
     use super::*;
+
+    #[test]
+    fn test_convert_rule_valid() {
+        assert_eq!(
+            convert_rule("||example.com^"),
+            Some("0.0.0.0 example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_rule_with_comment() {
+        assert_eq!(
+            convert_rule("||example.com^ # comment"),
+            Some("0.0.0.0 example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_rule_invalid_format() {
+        assert_eq!(convert_rule("|example.com^"), None);
+    }
+
+    #[test]
+    fn test_convert_rule_empty() {
+        assert_eq!(convert_rule("# just a comment"), None);
+    }
+
+    #[test]
+    fn test_convert_rule_invalid_domain() {
+        assert_eq!(convert_rule("||invalid_domain^"), None);
+    }
 
     #[test]
     fn test_convert_rule_subdomain() {
         let rule = "||sub.example.com^";
-        assert_eq!(convert_rule(rule), Some("0.0.0.0 sub.example.com".to_string()));
+        assert_eq!(
+            convert_rule(rule),
+            Some("0.0.0.0 sub.example.com".to_string())
+        );
     }
 
     #[test]
@@ -78,13 +121,13 @@ mod tests {
         assert_eq!(convert_rule(rule), None);
     }
 
-     #[test]
+    #[test]
     fn test_convert_rule_invalid_domain_format_delimeter_dot_and_comma() {
         let rule = "||example,.com^";
         assert_eq!(convert_rule(rule), None);
     }
 
-     #[test]
+    #[test]
     fn test_convert_rule_invalid_domain_format_delimeter_comma() {
         let rule = "||example,com^";
         assert_eq!(convert_rule(rule), None);

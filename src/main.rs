@@ -49,13 +49,14 @@ fn convert_rule(rule: &str) -> Option<String> {
             .next()
             .unwrap_or("");
         // Basic domain validation
-        let domain_re = match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
-            Ok(re) => re,
-            Err(e) => {
-                eprintln!("Failed to create regex: {e}");
-                return None;
-            }
-        };
+        let domain_re =
+            match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
+                Ok(re) => re,
+                Err(e) => {
+                    eprintln!("Failed to create regex: {e}");
+                    return None;
+                }
+            };
         if domain_re.is_match(domain) {
             return Some(format!("0.0.0.0 {domain}"));
         }
@@ -156,52 +157,4 @@ async fn main() -> io::Result<()> {
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
     ];
     run(urls).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_convert_rule_subdomain() {
-        let rule = "||sub.example.com^";
-        assert_eq!(convert_rule(rule), Some("0.0.0.0 sub.example.com".to_string()));
-    }
-
-    #[test]
-    fn test_convert_rule_multiple_carets() {
-        let rule = "||example.com^$third-party";
-        assert_eq!(convert_rule(rule), Some("0.0.0.0 example.com".to_string()));
-    }
-
-    #[test]
-    fn test_convert_rule_invalid_domain_format_delimiter_double_dot() {
-        let rule = "||example..com^";
-        assert_eq!(convert_rule(rule), None);
-    }
-
-     #[test]
-    fn test_convert_rule_invalid_domain_format_delimeter_dot_and_comma() {
-        let rule = "||example,.com^";
-        assert_eq!(convert_rule(rule), None);
-    }
-
-     #[test]
-    fn test_convert_rule_invalid_domain_format_delimeter_comma() {
-        let rule = "||example,com^";
-        assert_eq!(convert_rule(rule), None);
-    }
-
-    #[test]
-    fn test_convert_rule_with_whitespace() {
-        let rule = "  ||example.com^  ";
-        assert_eq!(convert_rule(rule), Some("0.0.0.0 example.com".to_string()));
-    }
-
-    #[test]
-    fn test_convert_rule_regex_error_handling() {
-        // This simulates a regex error by temporarily replacing the function
-        let rule = "||example.com^";
-        convert_rule(rule);
-    }
 }

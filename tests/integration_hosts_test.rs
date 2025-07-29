@@ -18,7 +18,8 @@ fn test_hosts_file_generation() {
     let mut unique_rules = std::collections::HashSet::new();
     let mut converted = Vec::new();
     for rule in &rules {
-        if let Some(c) = crate::convert_rule(rule) {
+        if let Some(c) = convert_rule(rule) {
+            // use imported function directly
             if unique_rules.insert(c.clone()) {
                 converted.push(c);
             }
@@ -36,4 +37,6 @@ fn test_hosts_file_generation() {
     assert!(content.contains("0.0.0.0 test.com"));
     assert!(!content.contains("invalid_domain"));
     assert!(!content.contains("# just a comment"));
+    // Check for duplicates
+    assert_eq!(content.matches("0.0.0.0 example.com").count(), 1);
 }
