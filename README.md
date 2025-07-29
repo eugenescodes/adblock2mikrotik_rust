@@ -4,13 +4,13 @@
 > [!TIP]
 > URL to add in RouterOS: https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt
 
-# adblock2mikrotik
+# adblock2mikrotik - AdBlock to MikroTik Hosts Format Converter
 
-Convert AdBlock/AdGuard filter lists to MikroTik RouterOS DNS adlist format.
+Convert AdBlock filter lists to a hosts format list compatible with MikroTik RouterOS DNS adlist.
 
 ## Overview
 
-A conversion utility designed to transform popular ad-blocking filter lists (AdGuard and Hagezi) into a compact, memory-efficient format compatible with MikroTik RouterOS 7.15+ DNS adlist feature.
+A conversion utility designed to transform popular ad-blocking filter lists in AdBlock format into a compact, memory-efficient hosts format list compatible with MikroTik RouterOS 7.15+ DNS adlist feature.
 
 ### Source Filter Lists
 
@@ -21,7 +21,7 @@ The primary goal is to create a minimal, optimized host file that addresses the 
 
 ## Features
 
-- Converts AdBlock/AdGuard syntax to MikroTik DNS adlist format
+- Converts AdBlock syntax to a hosts format list compatible with MikroTik DNS adlist
 - Removes duplicates and optimizes storage space
 - Supports multiple input filter list formats
 - Compatible with RouterOS 7.15 and newer
