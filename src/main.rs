@@ -1,3 +1,4 @@
+use adblock2mikrotik_rust::convert_rule;
 use chrono::Utc;
 use regex::Regex;
 use reqwest;
@@ -24,46 +25,6 @@ async fn fetch_rules(url: &str) -> Result<Vec<String>, reqwest::Error> {
     }
 }
 
-fn convert_rule(rule: &str) -> Option<String> {
-    // Remove comments and whitespace
-    let comment_re = match Regex::new(r"#.*$") {
-        Ok(re) => re,
-        Err(e) => {
-            eprintln!("Failed to create regex: {e}");
-            return None;
-        }
-    };
-    let rule = comment_re.replace(rule, "").trim().to_string();
-
-    if rule.is_empty() {
-        return None;
-    }
-
-    // Handle different rule formats
-    if rule.starts_with("||") && rule.contains("^") {
-        let domain = rule[2..]
-            .split('^')
-            .next()
-            .unwrap_or("")
-            .split('$')
-            .next()
-            .unwrap_or("");
-        // Basic domain validation
-        let domain_re =
-            match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
-                Ok(re) => re,
-                Err(e) => {
-                    eprintln!("Failed to create regex: {e}");
-                    return None;
-                }
-            };
-        if domain_re.is_match(domain) {
-            return Some(format!("0.0.0.0 {domain}"));
-        }
-    }
-    None
-}
-
 async fn run(urls: Vec<&str>) -> io::Result<()> {
     println!("Starting adblock rules conversion...");
 
@@ -73,12 +34,26 @@ async fn run(urls: Vec<&str>) -> io::Result<()> {
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     println!("Current time: {current_time}");
 
+    const LOG_INTERVAL: usize = 3000; // Change this value as needed
     let mut source_stats = Vec::new();
     let mut rules_by_source = Vec::new();
 
+    let fetches: Vec<_> = urls
+        .iter()
+        .map(|url| {
+            let url = url.to_string();
+            tokio::spawn(async move { fetch_rules(&url).await })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for fetch in fetches {
+        let rules_result = fetch.await.unwrap_or_else(|_| Ok(vec![]));
+        results.push(rules_result.unwrap_or_else(|_| vec![]));
+    }
+
     let mut fetch_stats = Vec::new();
-    for url in &urls {
-        let rules = fetch_rules(url).await.unwrap_or_else(|_| vec![]);
+    for (url, rules) in urls.iter().zip(results.into_iter()) {
         let mut converted_count = 0;
         let mut converted_rules = Vec::new();
         let total_rules = rules.len();
@@ -86,7 +61,7 @@ async fn run(urls: Vec<&str>) -> io::Result<()> {
         println!("Processing rules from: {url}");
 
         for (index, rule) in rules.iter().enumerate() {
-            if index % 1000 == 0 && index > 0 {
+            if index % LOG_INTERVAL == 0 && index > 0 {
                 println!("Processed {index}/{total_rules} rules...");
             }
             if let Some(converted) = convert_rule(rule) {
@@ -99,9 +74,9 @@ async fn run(urls: Vec<&str>) -> io::Result<()> {
 
         println!("Finished processing source: {url}");
         println!("Converted {converted_count} rules from this source");
-        fetch_stats.push(((*url).to_string(), total_rules));
-        source_stats.push(((*url).to_string(), converted_count));
-        rules_by_source.push(((*url).to_string(), converted_rules));
+        fetch_stats.push((url.to_string(), total_rules));
+        source_stats.push((url.to_string(), converted_count));
+        rules_by_source.push((url.to_string(), converted_rules));
     }
     let total_unique = unique_rules.len();
 
