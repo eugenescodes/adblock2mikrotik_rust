@@ -60,6 +60,40 @@ pub fn convert_rule(rule: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn test_convert_unique_rules_only() {
+        let rules = vec![
+            "||example.com^",
+            "||example.com^ # comment",
+            "||test.com^",
+            "||test.com^ # comment",
+            "||invalid_domain^",
+            "# just a comment",
+        ];
+        let mut unique_raw_rules = std::collections::HashSet::<String>::new();
+        let mut deduped_rules = Vec::new();
+        for rule in rules {
+            if unique_raw_rules.insert(rule.to_string()) {
+                deduped_rules.push(rule.to_string());
+            }
+        }
+        let mut unique_converted = std::collections::HashSet::<String>::new();
+        let mut converted_rules = Vec::new();
+        for rule in deduped_rules {
+            if let Some(converted) = super::convert_rule(&rule) {
+                if unique_converted.insert(converted.clone()) {
+                    converted_rules.push(converted);
+                }
+            }
+        }
+        assert_eq!(
+            converted_rules,
+            vec![
+                "0.0.0.0 example.com".to_string(),
+                "0.0.0.0 test.com".to_string()
+            ]
+        );
+    }
+    #[test]
     fn test_convert_rule_domain_with_dash() {
         let rule = "||my-domain.com^";
         assert_eq!(
