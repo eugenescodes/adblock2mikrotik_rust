@@ -28,7 +28,7 @@ The primary goal is to create a minimal, optimized host file that addresses the 
 - Preserves only domain-based rules
 - Removes comments and unnecessary elements
 
-Supports common AdBlock/AdGuard filter rules, including:
+Supports common AdBlock syntax filter rules, including:
 
 - Domain rules (`||example.com^`)
 - Basic URL rules
@@ -85,7 +85,7 @@ certificates-imported: 149
 After that run next command:
 
 ```routeros
-/ip/dns/adlist add url=_https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=yes
+/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=yes
 ```
 
 For a comprehensive guide on DNS adblocking and adlist configuration, refer to the official MikroTik documentation:
