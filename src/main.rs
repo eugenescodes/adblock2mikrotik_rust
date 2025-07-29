@@ -5,8 +5,9 @@ use reqwest;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
+use tokio::task;
 
-async fn fetch_rules(url: &str) -> Result<Vec<String>, reqwest::Error> {
+async fn fetch_rules(url: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     println!("Fetching rules from: {url}");
     let client = reqwest::Client::new();
     let response = client
@@ -15,10 +16,19 @@ async fn fetch_rules(url: &str) -> Result<Vec<String>, reqwest::Error> {
         .send()
         .await?;
     if response.status().is_success() {
-        let text = response.text().await?;
-        let rules: Vec<String> = text.lines().map(String::from).collect();
-        println!("Successfully fetched {} rules from {}", rules.len(), url);
-        Ok(rules)
+        // Try to get response bytes first
+        let bytes = response.bytes().await?;
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => {
+                let rules: Vec<String> = text.lines().map(String::from).collect();
+                println!("Successfully fetched {} rules from {}", rules.len(), url);
+                Ok(rules)
+            }
+            Err(e) => {
+                eprintln!("Failed to decode response body from {url}: {e}");
+                Err(Box::new(e))
+            }
+        }
     } else {
         eprintln!("Error fetching {}: HTTP {}", url, response.status());
         Ok(vec![])
@@ -28,57 +38,65 @@ async fn fetch_rules(url: &str) -> Result<Vec<String>, reqwest::Error> {
 async fn run(urls: Vec<&str>) -> io::Result<()> {
     println!("Starting adblock rules conversion...");
 
-    let mut unique_rules = HashSet::new();
-
-    // Write header with timestamp
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     println!("Current time: {current_time}");
 
     const LOG_INTERVAL: usize = 3000; // Change this value as needed
-    let mut source_stats = Vec::new();
-    let mut rules_by_source = Vec::new();
 
-    let fetches: Vec<_> = urls
-        .iter()
-        .map(|url| {
-            let url = url.to_string();
-            tokio::spawn(async move { fetch_rules(&url).await })
-        })
-        .collect();
-
-    let mut results = Vec::new();
-    for fetch in fetches {
-        let rules_result = fetch.await.unwrap_or_else(|_| Ok(vec![]));
-        results.push(rules_result.unwrap_or_else(|_| vec![]));
+    // Concurrently fetch all rules
+    let mut handles = Vec::new();
+    for url in urls {
+        let url = url.to_string();
+        handles.push(task::spawn(async move {
+            (url.clone(), fetch_rules(&url).await)
+        }));
     }
 
+    let mut all_raw_rules = Vec::new();
     let mut fetch_stats = Vec::new();
-    for (url, rules) in urls.iter().zip(results.into_iter()) {
-        let mut converted_count = 0;
-        let mut converted_rules = Vec::new();
-        let total_rules = rules.len();
 
-        println!("Processing rules from: {url}");
-
-        for (index, rule) in rules.iter().enumerate() {
-            if index % LOG_INTERVAL == 0 && index > 0 {
-                println!("Processed {index}/{total_rules} rules...");
+    for handle in handles {
+        match handle.await {
+            Ok((url, Ok(rules))) => {
+                println!("Fetched {} rules from {}", rules.len(), url);
+                fetch_stats.push((url, rules.len()));
+                all_raw_rules.extend(rules);
             }
-            if let Some(converted) = convert_rule(rule) {
-                if unique_rules.insert(converted.clone()) {
-                    converted_rules.push(converted);
-                    converted_count += 1;
-                }
+            Ok((url, Err(e))) => {
+                eprintln!("Failed to fetch rules from {url}: {e}");
+            }
+            Err(e) => {
+                eprintln!("Task join error: {e}");
             }
         }
-
-        println!("Finished processing source: {url}");
-        println!("Converted {converted_count} rules from this source");
-        fetch_stats.push((url.to_string(), total_rules));
-        source_stats.push((url.to_string(), converted_count));
-        rules_by_source.push((url.to_string(), converted_rules));
     }
-    let total_unique = unique_rules.len();
+
+    // Deduplicate raw rules
+    let unique_raw_rules: HashSet<_> = all_raw_rules.into_iter().collect();
+    println!("Total unique raw rules: {}", unique_raw_rules.len());
+
+    if unique_raw_rules.is_empty() {
+        eprintln!("No rules fetched. Skipping writing hosts.txt.");
+        println!("Program completed without writing hosts.txt due to no data.");
+        return Ok(());
+    }
+
+    // Convert only unique rules
+    let mut unique_converted_rules = HashSet::new();
+    let mut converted_rules_vec = Vec::new();
+
+    for (index, rule) in unique_raw_rules.iter().enumerate() {
+        if index % LOG_INTERVAL == 0 && index > 0 {
+            println!("Converted {index} unique rules...");
+        }
+        if let Some(converted) = convert_rule(rule) {
+            if unique_converted_rules.insert(converted.clone()) {
+                converted_rules_vec.push(converted);
+            }
+        }
+    }
+
+    let total_unique_converted = unique_converted_rules.len();
 
     // Build header with all stats and info at the top
     let mut header = format!(
@@ -92,15 +110,18 @@ async fn run(urls: Vec<&str>) -> io::Result<()> {
 # Convert to format: 0.0.0.0 domain.tld
 "#
     );
-    for ((url, fetched_count), (_, converted_count)) in fetch_stats.iter().zip(source_stats.iter())
-    {
+
+    for (url, fetched_count) in &fetch_stats {
         header.push_str(&format!("#\n# Source: {url}\n"));
         header.push_str(&format!("# Successfully fetched {fetched_count} domains\n"));
-        header.push_str(&format!(
-            "# Converted {converted_count} domains from this source\n"
-        ));
     }
-    header.push_str(&format!("#\n# Total unique: {total_unique} domains\n#\n"));
+    header.push_str(&format!(
+        "#\n# Total unique raw rules: {}\n",
+        unique_raw_rules.len()
+    ));
+    header.push_str(&format!(
+        "# Total unique converted rules: {total_unique_converted}\n#\n",
+    ));
 
     let file = File::create("hosts.txt").map_err(|e| {
         eprintln!("Failed to create file: {e}");
@@ -111,13 +132,10 @@ async fn run(urls: Vec<&str>) -> io::Result<()> {
     writer.write_all(header.as_bytes())?;
     println!("Header written successfully");
 
-    for (_url, rules) in &rules_by_source {
-        for rule in rules {
-            writeln!(writer, "{rule}")?;
-        }
+    for rule in &converted_rules_vec {
+        writeln!(writer, "{rule}")?;
     }
 
-    // Ensure all buffered data is written to the file
     writer.flush()?;
     println!("All data has been written to hosts.txt");
     println!("Program completed successfully!");
@@ -132,4 +150,30 @@ async fn main() -> io::Result<()> {
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
     ];
     run(urls).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tokio;
+
+    #[tokio::test]
+    async fn test_run_no_rules_no_file_written() {
+        // Remove hosts.txt if exists
+        let _ = fs::remove_file("hosts.txt");
+
+        // Run with empty URLs to simulate no fetching
+        let result = run(vec![]).await;
+
+        // Assert run completed successfully
+        assert!(result.is_ok());
+
+        // Assert hosts.txt does not exist
+        let file_exists = fs::metadata("hosts.txt").is_ok();
+        assert!(
+            !file_exists,
+            "hosts.txt should not be created when no rules fetched"
+        );
+    }
 }
