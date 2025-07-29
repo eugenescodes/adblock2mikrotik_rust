@@ -155,3 +155,39 @@ async fn main() -> io::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_rule_valid() {
+        // Adblock rule with domain
+        let rule = "||example.com^";
+        assert_eq!(convert_rule(rule), Some("0.0.0.0 example.com".to_string()));
+    }
+
+    #[test]
+    fn test_convert_rule_with_comment() {
+        let rule = "||example.com^ # comment";
+        assert_eq!(convert_rule(rule), Some("0.0.0.0 example.com".to_string()));
+    }
+
+    #[test]
+    fn test_convert_rule_invalid_format() {
+        let rule = "|example.com^";
+        assert_eq!(convert_rule(rule), None);
+    }
+
+    #[test]
+    fn test_convert_rule_empty() {
+        let rule = "# just a comment";
+        assert_eq!(convert_rule(rule), None);
+    }
+
+    #[test]
+    fn test_convert_rule_invalid_domain() {
+        let rule = "||invalid_domain^";
+        assert_eq!(convert_rule(rule), None);
+    }
+}
