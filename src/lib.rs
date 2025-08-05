@@ -1,10 +1,18 @@
+use anyhow::{Context, Result};
 use chrono::Utc;
+use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use tokio::task;
+
+lazy_static! {
+    static ref COMMENT_RE: Regex = Regex::new(r"#.*$").unwrap();
+    static ref DOMAIN_RE: Regex =
+        Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$").unwrap();
+}
 
 /// Converts an adblock rule to a hosts file entry, or returns None if invalid.
 ///
@@ -25,14 +33,7 @@ use tokio::task;
 /// ```
 pub fn convert_rule(rule: &str) -> Option<String> {
     // Remove comments and whitespace
-    let comment_re = match Regex::new(r"#.*$") {
-        Ok(re) => re,
-        Err(e) => {
-            eprintln!("Failed to create regex: {e}");
-            return None;
-        }
-    };
-    let rule = comment_re.replace(rule, "").trim().to_string();
+    let rule = COMMENT_RE.replace(rule, "").trim().to_string();
 
     if rule.is_empty() {
         return None;
@@ -48,48 +49,38 @@ pub fn convert_rule(rule: &str) -> Option<String> {
             .next()
             .unwrap_or("");
         // Basic domain validation
-        let domain_re =
-            match Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$") {
-                Ok(re) => re,
-                Err(e) => {
-                    eprintln!("Failed to create regex: {e}");
-                    return None;
-                }
-            };
-        if domain_re.is_match(domain) {
+        if DOMAIN_RE.is_match(domain) {
             return Some(format!("0.0.0.0 {domain}"));
         }
     }
     None
 }
 
-pub async fn fetch_rules(
-    url: &str,
-) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn fetch_rules(url: &str) -> Result<Vec<String>> {
     println!("Fetching rules from: {url}");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .http1_only()
+        .build()
+        .expect("Failed to build reqwest client");
     let response = client
         .get(url)
         .timeout(std::time::Duration::from_secs(10))
         .send()
-        .await?;
+        .await
+        .with_context(|| format!("Failed to send request to {url}"))?;
+
     if response.status().is_success() {
-        // Try to get response bytes first
-        let bytes = response.bytes().await?;
-        match std::str::from_utf8(&bytes) {
-            Ok(text) => {
-                let rules: Vec<String> = text.lines().map(String::from).collect();
-                println!("Successfully fetched {} rules from {}", rules.len(), url);
-                Ok(rules)
-            }
-            Err(e) => {
-                eprintln!("Failed to decode response body from {url}: {e}");
-                Err(Box::new(e))
-            }
-        }
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| format!("Failed to read response bytes from {url}"))?;
+        let text = std::str::from_utf8(&bytes)
+            .with_context(|| format!("Failed to decode response body from {url}"))?;
+        let rules: Vec<String> = text.lines().map(String::from).collect();
+        println!("Successfully fetched {} rules from {}", rules.len(), url);
+        Ok(rules)
     } else {
-        eprintln!("Error fetching {}: HTTP {}", url, response.status());
-        Ok(vec![])
+        anyhow::bail!("Error fetching {}: HTTP {}", url, response.status());
     }
 }
 
