@@ -172,6 +172,15 @@ pub async fn run(urls: Vec<&str>) -> io::Result<()> {
         "# Total unique converted rules: {total_unique_converted}\n#\n",
     ));
 
+    // Backup previous hosts.txt if it exists
+    if std::path::Path::new("hosts.txt").exists() {
+        if let Err(e) = std::fs::copy("hosts.txt", "hosts.txt.bak") {
+            eprintln!("Warning: Failed to backup hosts.txt: {e}");
+        } else {
+            println!("Previous hosts.txt backed up to hosts.txt.bak");
+        }
+    }
+
     let file = File::create("hosts.txt").map_err(|e| {
         eprintln!("Failed to create file: {e}");
         e
@@ -188,6 +197,45 @@ pub async fn run(urls: Vec<&str>) -> io::Result<()> {
     writer.flush()?;
     println!("All data has been written to hosts.txt");
     println!("Program completed successfully!");
+
+    // Compare with previous hosts.txt.bak if it exists
+    if std::path::Path::new("hosts.txt.bak").exists() {
+        use std::collections::HashSet;
+        use std::fs;
+
+        fn extract_hosts(path: &str) -> HashSet<String> {
+            fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        None
+                    } else {
+                        // Only take the domain part (after "0.0.0.0 ")
+                        line.split_whitespace().nth(1).map(|s| s.to_string())
+                    }
+                })
+                .collect()
+        }
+
+        let old_hosts = extract_hosts("hosts.txt.bak");
+        let new_hosts = extract_hosts("hosts.txt");
+
+        let added: Vec<_> = new_hosts.difference(&old_hosts).collect();
+        let removed: Vec<_> = old_hosts.difference(&new_hosts).collect();
+
+        println!("--- Host file update summary ---");
+        println!("New hosts added: {}", added.len());
+        for host in &added {
+            println!("  + {host}");
+        }
+        println!("Hosts removed: {}", removed.len());
+        for host in &removed {
+            println!("  - {host}");
+        }
+        println!("-------------------------------");
+    }
 
     Ok(())
 }
