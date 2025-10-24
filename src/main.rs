@@ -6,6 +6,7 @@ async fn main() -> io::Result<()> {
     let urls = vec![
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt",
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/gambling.mini.txt",
     ];
     run(urls).await
 }
