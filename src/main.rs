@@ -15,7 +15,6 @@ async fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    
 
     #[tokio::test]
     async fn test_run_no_rules_no_file_written() {
