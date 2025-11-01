@@ -195,7 +195,7 @@ pub async fn run(urls: Vec<&str>) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use tokio;
+    
 
     #[tokio::test]
     async fn test_run_no_rules_no_file_written() {

@@ -1,5 +1,4 @@
 use adblock2mikrotik_rust::{fetch_rules, run};
-use tokio;
 
 fn setup_server() -> mockito::ServerGuard {
     mockito::Server::new()
@@ -59,7 +58,7 @@ fn test_run_with_partial_failure() {
 
     let _m2 = server2.mock("GET", "/rules").with_status(500).create();
 
-    let urls = vec![
+    let urls = [
         format!("{}/rules", server1.url()),
         format!("{}/rules", server2.url()),
     ];
