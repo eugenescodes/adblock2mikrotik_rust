@@ -119,7 +119,45 @@ cargo run --release
 
 This will generate or update the `hosts.txt` file in the project directory.
 
-4. To apply the generated hosts file on your MikroTik RouterOS, upload the `hosts.txt` file to the router and add it as a DNS adlist:
+## Docker Usage
+
+### Quick Start
+
+1. Build the Docker image:
+
+```bash
+docker build -t adblock2mikrotik_rust .
+```
+
+2. Run the container to generate `hosts.txt`:
+
+```bash
+# Linux/macOS
+docker run --rm -v $(pwd)/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
+
+# Windows PowerShell
+docker run --rm -v ${PWD}/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
+```
+
+### Troubleshooting
+
+If you encounter network issues fetching the filter lists, try running with host network mode:
+
+```bash
+docker run --rm --network host -v $(pwd)/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
+```
+
+### What It Does
+
+The container will:
+
+- Fetch the latest filter lists
+- Convert AdBlock format to MikroTik hosts format
+- Save the result to `hosts.txt` in your current directory
+
+## Upload Generated File to MikroTik
+
+To apply the generated hosts file on your MikroTik RouterOS, upload the `hosts.txt` file to the router and add it as a DNS adlist:
 
 ```routeros
 /ip/dns/adlist add file=hosts.txt
