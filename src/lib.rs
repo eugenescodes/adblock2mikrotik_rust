@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use lazy_static::lazy_static;
 use regex::Regex;
-use reqwest;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
