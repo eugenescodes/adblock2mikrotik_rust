@@ -45,7 +45,7 @@ Generates a clean list of domains in MikroTik DNS adlist format:
 
 ## Use on MikroTik
 
-How to implement DNS adblocking on MikroTik RouterOS 7.15+ using online blocklists. You must have active internet connextion and basic RouterOS configuration knowledge.
+How to implement DNS adblocking on MikroTik RouterOS 7.15+ using online blocklists. You must have active internet connection and basic RouterOS configuration knowledge.
 To add a URL-based adlist for DNS adblocking, use the following command in the router terminal:
 
 ```routeros
@@ -95,6 +95,10 @@ For a comprehensive guide on DNS adblocking and adlist configuration, refer to t
 - [Certificates - MikroTik Documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/2555969/Certificates)
 
 ## Use on local
+
+### Prerequisites
+
+- Rust and Cargo [installed on your system](https://rust-lang.org/tools/install/)
 
 To use the tool locally, follow these steps:
 
