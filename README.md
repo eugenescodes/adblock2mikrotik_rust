@@ -133,7 +133,15 @@ This will generate or update the `hosts.txt` file in the project directory.
 docker build -t adblock2mikrotik_rust .
 ```
 
-2. Run the container to generate `hosts.txt`:
+2. Run the container to generate `hosts.txt`. 
+
+> [!IMPORTANT]
+> If `hosts.txt` does not exist in your current directory, Docker might create it as a directory. To avoid this, create the file first:
+> ```bash
+> touch hosts.txt
+> ```
+
+Then run the container:
 
 ```bash
 # Linux/macOS
@@ -143,9 +151,15 @@ docker run --rm -v $(pwd)/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
 docker run --rm -v ${PWD}/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
 ```
 
+Alternatively, you can mount the current directory and let the app create the file:
+
+```bash
+docker run --rm -v $(pwd):/app adblock2mikrotik_rust
+```
+
 ### Troubleshooting
 
-If you encounter an error like `Failed to create file: Is a directory (os error 21)`, it's likely because `hosts.txt` does not exist on your host and Docker created it as a directory. To fix this, remove the directory and create an empty file before running the container:
+If you encounter an error like `Failed to create file: Is a directory (os error 21)`, it's because `hosts.txt` was created as a directory by Docker (this happens when you mount a non-existent file path). To fix this, remove the directory and create an empty file:
 
 ```bash
 rm -rf hosts.txt
