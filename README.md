@@ -145,6 +145,13 @@ docker run --rm -v ${PWD}/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
 
 ### Troubleshooting
 
+If you encounter an error like `Failed to create file: Is a directory (os error 21)`, it's likely because `hosts.txt` does not exist on your host and Docker created it as a directory. To fix this, remove the directory and create an empty file before running the container:
+
+```bash
+rm -rf hosts.txt
+touch hosts.txt
+```
+
 If you encounter network issues fetching the filter lists, try running with host network mode:
 
 ```bash
