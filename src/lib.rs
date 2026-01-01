@@ -188,7 +188,7 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         unique_raw_rules.len()
     ));
     header.push_str(&format!(
-        "# Total unique converted rules: {total_unique_converted}\n#\n",
+        "# Total unique converted rules: {total_unique_converted}\n\n",
     ));
 
     use tokio::fs::File as TokioFile;
