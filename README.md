@@ -1,8 +1,8 @@
 > [!NOTE]
-> This repository provides a Rust version of the - https://github.com/eugenescodes/adblock2mikrotik
+> This repository provides a Rust version of the - <https://github.com/eugenescodes/adblock2mikrotik>
 
 > [!TIP]
-> URL to add in RouterOS: https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt
+> URL to add in RouterOS: <https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt>
 
 # adblock2mikrotik - AdBlock to MikroTik Hosts Format Converter
 
@@ -109,13 +109,13 @@ git clone https://github.com/eugenescodes/adblock2mikrotik_rust.git
 cd adblock2mikrotik_rust
 ```
 
-2. Build the project in release mode:
+1. Build the project in release mode:
 
 ```bash
 cargo build --release
 ```
 
-3. Run the application:
+1. Run the application:
 
 ```bash
 cargo run --release
@@ -133,10 +133,11 @@ This will generate or update the `hosts.txt` file in the project directory.
 docker build -t adblock2mikrotik_rust .
 ```
 
-2. Run the container to generate `hosts.txt`. 
+1. Run the container to generate `hosts.txt`.
 
 > [!IMPORTANT]
 > If `hosts.txt` does not exist in your current directory, Docker might create it as a directory. To avoid this, create the file first:
+>
 > ```bash
 > touch hosts.txt
 > ```
