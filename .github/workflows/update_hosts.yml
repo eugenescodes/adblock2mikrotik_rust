@@ -3,6 +3,10 @@ name: Update Converted Hosts
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   schedule:
     - cron: 0 */6 * * *  # Runs every 6 hours
