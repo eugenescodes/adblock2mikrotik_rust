@@ -10,3 +10,8 @@ updates:
     schedule:
       # Check for updates to cargo every day
       interval: daily
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      # Check for updates to Docker base images every day
+      interval: daily
