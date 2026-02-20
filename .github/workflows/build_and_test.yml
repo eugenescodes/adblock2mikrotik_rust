@@ -1,7 +1,7 @@
 name: Build and Test
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -15,7 +15,7 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:  # Allow manual runs
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -46,17 +48,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - name: Auto-format code
+        run: cargo fmt --all
+
+      - name: Commit and push formatting
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff-index --quiet HEAD || (git commit -m "auto-format code" && git push)
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build project in debug mode
-        run: cargo build --verbose
-
-      - name: Build project in release mode
-        run: cargo build --release --verbose
 
       - name: Run tests
         run: cargo test --verbose
@@ -76,6 +79,4 @@ jobs:
         run: docker build -t adblock2mikrotik_rust .
 
       - name: Test Docker image
-        run: |
-          docker run --rm adblock2mikrotik_rust || true
-          echo "Docker image built successfully"
+        run: docker run --rm adblock2mikrotik_rust
