@@ -14,5 +14,5 @@ anyhow = "1.0.102"
 
 [dev-dependencies]
 mockito = "1.7.2"
-tempfile = "3.25.0"
+tempfile = "3.26.0"
 reqwest = { version = "0.12.28", features = ["blocking"] }
