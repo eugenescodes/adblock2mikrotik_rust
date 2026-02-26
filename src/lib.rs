@@ -118,15 +118,14 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         }));
     }
 
-    let mut all_raw_rules: Vec<String> = Vec::new();
-    let mut fetch_stats: Vec<(String, usize)> = Vec::new();
+    // Collect results preserving order
+    let mut fetched_sources: Vec<(String, Vec<String>)> = Vec::new();
 
     for handle in handles {
         match handle.await {
             Ok((url, Ok(rules))) => {
                 println!("Fetched {} rules from {}", rules.len(), url);
-                fetch_stats.push((url, rules.len()));
-                all_raw_rules.extend(rules);
+                fetched_sources.push((url, rules));
             }
             Ok((url, Err(e))) => {
                 eprintln!("Failed to fetch rules from {url}: {e}");
@@ -137,59 +136,75 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         }
     }
 
-    // Deduplicate raw rules
-    let unique_raw_rules: HashSet<String> = all_raw_rules.into_iter().collect();
-    println!("Total unique raw rules: {}", unique_raw_rules.len());
-
-    if unique_raw_rules.is_empty() {
+    if fetched_sources.is_empty() {
         eprintln!("No rules fetched. Skipping writing hosts.txt.");
         println!("Program completed without writing hosts.txt due to no data.");
         return Ok(());
     }
 
-    // Convert only unique rules
-    let mut unique_converted_rules: HashSet<String> = HashSet::new();
-    let mut converted_rules_vec: Vec<String> = Vec::new();
+    // Process sequentially per source to track unique domains per source
+    let mut unique_rules: HashSet<String> = HashSet::new();
+    let mut source_data: Vec<(String, Vec<String>)> = Vec::new(); // { url: [converted_rules] }
 
-    for (index, rule) in unique_raw_rules.iter().enumerate() {
-        if index % LOG_INTERVAL == 0 && index > 0 {
-            println!("Converted {index} unique rules...");
-        }
-        if let Some(converted) = convert_rule(rule) {
-            if unique_converted_rules.insert(converted.clone()) {
-                converted_rules_vec.push(converted);
+    for (url, rules) in fetched_sources {
+        let mut converted: Vec<String> = Vec::new();
+        for (index, rule) in rules.iter().enumerate() {
+            if index % LOG_INTERVAL == 0 && index > 0 {
+                println!("Processing {index} rules from {url}...");
+            }
+            if let Some(result) = convert_rule(rule) {
+                if unique_rules.insert(result.clone()) {
+                    converted.push(result);
+                }
             }
         }
+        println!(
+            "{} --> {} unique domains",
+            url.split('/').next_back().unwrap_or(&url),
+            converted.len()
+        );
+        source_data.push((url, converted));
     }
 
-    let total_unique_converted = unique_converted_rules.len();
+    let total_unique = unique_rules.len();
 
     // Build header with all stats and info at the top
-    let current_time = Utc::now().to_rfc3339();
+    let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
 
-    let mut header = format!(
-        r#"# Title: This filter compiled from trusted, verified sources and optimized for compatibility with DNS-level ad blocking by merging and simplifying multiple filters
-#
-# Homepage: https://github.com/eugenescodes/adblock2mikrotik
-# License: https://github.com/eugenescodes/adblock2mikrotik/blob/main/LICENSE
-#
-# Last modified: {current_time}
-#
-# Convert to format: 0.0.0.0 domain.tld
-"#
+    // Prepare lines before header (same pattern as Python version)
+    let url_lines: String = source_data
+        .iter()
+        .map(|(url, _)| format!("# - {url}\n"))
+        .collect();
+
+    let source_lines: String = source_data
+        .iter()
+        .map(|(url, rules)| {
+            let short = url.split('/').next_back().unwrap_or(url);
+            format!("# - {short} --> {:} unique domains\n", rules.len())
+        })
+        .collect();
+
+    let header = format!(
+        "# Title: Unified DNS blocklist optimized for RouterOS, compiled from Hagezi sources\n\
+         #\n\
+         # URL to add in RouterOS:\n\
+         # https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt\n\
+         #\n\
+         # Homepage: https://github.com/eugenescodes/adblock2mikrotik_rust\n\
+         # License: https://github.com/eugenescodes/adblock2mikrotik_rust/blob/main/LICENSE\n\
+         #\n\
+         # Last modified: {current_time}\n\
+         #\n\
+         # This filter is generated using the following Hagezi DNS blocklist sources:\n\
+         {url_lines}\
+         #\n\
+         # Total unique domains: {total_unique}\n\
+         {source_lines}\
+         #\n\
+         # Format: 0.0.0.0 domain.tld\n\
+         #\n"
     );
-
-    for (url, fetched_count) in &fetch_stats {
-        header.push_str(&format!("#\n# Source: {url}\n"));
-        header.push_str(&format!("# Successfully fetched {fetched_count} domains\n"));
-    }
-    header.push_str(&format!(
-        "#\n# Total unique raw rules: {}\n",
-        unique_raw_rules.len()
-    ));
-    header.push_str(&format!(
-        "# Total unique converted rules: {total_unique_converted}\n\n",
-    ));
 
     use tokio::fs::File as TokioFile;
     use tokio::io::{AsyncWriteExt, BufWriter as AsyncBufWriter};
@@ -203,9 +218,23 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     writer.write_all(header.as_bytes()).await?;
     println!("Header written successfully");
 
-    for rule in &converted_rules_vec {
-        writer.write_all(format!("{rule}\n").as_bytes()).await?;
+    for (url, rules) in &source_data {
+        writer
+            .write_all(format!("\n# Source: {url}\n\n").as_bytes())
+            .await?;
+        for rule in rules {
+            writer.write_all(format!("{rule}\n").as_bytes()).await?;
+        }
+        writer
+            .write_all(
+                format!("\n# Converted {:} rules from this source\n\n", rules.len()).as_bytes(),
+            )
+            .await?;
     }
+
+    writer
+        .write_all(format!("\n# Total unique domains: {total_unique}\n").as_bytes())
+        .await?;
 
     writer.flush().await?;
     println!("All data has been written to hosts.txt");
