@@ -6,8 +6,6 @@ use regex::Regex;
 use std::collections::HashSet;
 use tokio::task;
 
-const LOG_INTERVAL: usize = 1000;
-
 lazy_static! {
     static ref COMMENT_RE: Regex = Regex::new(r"#.*$").unwrap();
     // Slightly strengthened the regex for domains (will not allow completely strange characters)
@@ -57,7 +55,7 @@ pub fn convert_rule(rule: &str) -> Option<String> {
 }
 
 pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<String>> {
-    println!("Fetching rules from: {}", url);
+    // println!("Fetching rules from: {}", url);
 
     // Use the shared client passed as an argument
     let response = client
@@ -87,12 +85,25 @@ pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<Stri
             .filter(|line: &String| !line.is_empty())
             .collect();
 
-        println!("Successfully fetched rules from {}", url);
+        // println!("Successfully fetched rules from {}", url);
         Ok(rules)
     } else {
         // This line is uncovered by tests due to error handling
         anyhow::bail!("Error fetching {}: HTTP {}", url, response.status());
     }
+}
+
+// Helper function to format numbers with commas (e.g., 76376 -> "76,376")
+fn format_with_commas(n: usize) -> String {
+    let n_str = n.to_string();
+    let mut result = String::new();
+    for (i, c) in n_str.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }
 
 pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
@@ -124,7 +135,7 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     for handle in handles {
         match handle.await {
             Ok((url, Ok(rules))) => {
-                println!("Fetched {} rules from {}", rules.len(), url);
+                // println!("Fetched {} rules from {}", rules.len(), url);
                 fetched_sources.push((url, rules));
             }
             Ok((url, Err(e))) => {
@@ -148,21 +159,23 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
 
     for (url, rules) in fetched_sources {
         let mut converted: Vec<String> = Vec::new();
-        for (index, rule) in rules.iter().enumerate() {
-            if index % LOG_INTERVAL == 0 && index > 0 {
-                println!("Processing {index} rules from {url}...");
-            }
+        for (_index, rule) in rules.iter().enumerate() {
+            // Remove the old LOG_INTERVAL print here
             if let Some(result) = convert_rule(rule) {
                 if unique_rules.insert(result.clone()) {
                     converted.push(result);
                 }
             }
         }
+
+        // Print the formatted block for each source
+        println!("Fetching: {}", url);
+        println!("Fetched {} lines", format_with_commas(rules.len()));
         println!(
-            "{} --> {} unique domains",
-            url.split('/').next_back().unwrap_or(&url),
-            converted.len()
+            "Converted {} unique domains\n",
+            format_with_commas(converted.len())
         );
+
         source_data.push((url, converted));
     }
 
@@ -237,8 +250,11 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         .await?;
 
     writer.flush().await?;
-    println!("All data has been written to hosts.txt");
-    println!("Program completed successfully!");
+    println!(
+        "Total unique domains across all sources: {}",
+        format_with_commas(total_unique)
+    );
+    println!("Done! Written to: hosts.txt");
 
     Ok(())
 }
