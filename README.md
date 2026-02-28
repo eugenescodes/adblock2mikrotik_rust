@@ -145,16 +145,6 @@ docker build -t adblock2mikrotik_rust .
 Then run the container:
 
 ```bash
-# Linux/macOS
-docker run --rm -v $(pwd)/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
-
-# Windows PowerShell
-docker run --rm -v ${PWD}/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
-```
-
-Alternatively, you can mount the current directory and let the app create the file:
-
-```bash
 docker run --rm -v $(pwd):/app adblock2mikrotik_rust
 ```
 
@@ -165,12 +155,6 @@ If you encounter an error like `Failed to create file: Is a directory (os error 
 ```bash
 rm -rf hosts.txt
 touch hosts.txt
-```
-
-If you encounter network issues fetching the filter lists, try running with host network mode:
-
-```bash
-docker run --rm --network host -v $(pwd)/hosts.txt:/app/hosts.txt adblock2mikrotik_rust
 ```
 
 ### What It Does
