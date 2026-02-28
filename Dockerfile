@@ -39,7 +39,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled binary
-COPY --from=builder /build/target/release/adblock2mikrotik_rust /app/adblock2mikrotik_rust
+COPY --from=builder /build/target/release/adblock2mikrotik_rust /usr/local/bin/adblock2mikrotik_rust
 
-ENTRYPOINT ["/app/adblock2mikrotik_rust"]
+ENTRYPOINT ["/usr/local/bin/adblock2mikrotik_rust"]
 CMD []
