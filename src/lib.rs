@@ -4,7 +4,6 @@ use encoding_rs::UTF_8;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashSet;
-use tokio::task;
 
 lazy_static! {
     static ref COMMENT_RE: Regex = Regex::new(r"#.*$").unwrap();
@@ -55,8 +54,6 @@ pub fn convert_rule(rule: &str) -> Option<String> {
 }
 
 pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<String>> {
-    // println!("Fetching rules from: {}", url);
-
     // Use the shared client passed as an argument
     let response = client
         .get(url)
@@ -85,7 +82,6 @@ pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<Stri
             .filter(|line: &String| !line.is_empty())
             .collect();
 
-        // println!("Successfully fetched rules from {}", url);
         Ok(rules)
     } else {
         // This line is uncovered by tests due to error handling
@@ -115,68 +111,39 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         .build()
         .expect("Failed to build reqwest client");
 
-    let mut handles = Vec::new();
+    let mut unique_rules: HashSet<String> = HashSet::new();
+    let mut source_data: Vec<(String, Vec<String>)> = Vec::new();
 
+    // Fetch and convert sequentially so output is grouped per source
     for url in urls {
         let url = url.to_string();
-        // Clone the client for each task (cheap operation, uses Arc internally)
-        let client = client.clone();
-
-        handles.push(task::spawn(async move {
-            // Pass the client reference to the fetch function
-            let result = fetch_rules(&client, &url).await;
-            (url, result)
-        }));
-    }
-
-    // Collect results preserving order
-    let mut fetched_sources: Vec<(String, Vec<String>)> = Vec::new();
-
-    for handle in handles {
-        match handle.await {
-            Ok((url, Ok(rules))) => {
-                // println!("Fetched {} rules from {}", rules.len(), url);
-                fetched_sources.push((url, rules));
-            }
-            Ok((url, Err(e))) => {
-                eprintln!("Failed to fetch rules from {url}: {e}");
+        println!("Fetching: {}", url);
+        match fetch_rules(&client, &url).await {
+            Ok(rules) => {
+                println!("Fetched {} lines", format_with_commas(rules.len()));
+                let mut converted: Vec<String> = Vec::new();
+                for rule in rules.iter() {
+                    if let Some(result) = convert_rule(rule) {
+                        if unique_rules.insert(result.clone()) {
+                            converted.push(result);
+                        }
+                    }
+                }
+                println!(
+                    "Converted {} unique domains\n",
+                    format_with_commas(converted.len())
+                );
+                source_data.push((url, converted));
             }
             Err(e) => {
-                eprintln!("Task join error: {e}");
+                eprintln!("Failed to fetch rules from {url}: {e}");
             }
         }
     }
 
-    if fetched_sources.is_empty() {
+    if source_data.is_empty() {
         eprintln!("No rules fetched. Skipping writing hosts.txt.");
-        println!("Program completed without writing hosts.txt due to no data.");
         return Ok(());
-    }
-
-    // Process sequentially per source to track unique domains per source
-    let mut unique_rules: HashSet<String> = HashSet::new();
-    let mut source_data: Vec<(String, Vec<String>)> = Vec::new(); // { url: [converted_rules] }
-
-    for (url, rules) in fetched_sources {
-        let mut converted: Vec<String> = Vec::new();
-        for (_index, rule) in rules.iter().enumerate() {
-            // Remove the old LOG_INTERVAL print here
-            if let Some(result) = convert_rule(rule) {
-                if unique_rules.insert(result.clone()) {
-                    converted.push(result);
-                }
-            }
-        }
-
-        // Print the formatted block for each source
-        println!("Fetching: {}", url);
-        println!("Fetched {} lines", format_with_commas(rules.len()));
-        println!(
-            "Converted {} unique domains\n",
-            format_with_commas(converted.len())
-        );
-
-        source_data.push((url, converted));
     }
 
     let total_unique = unique_rules.len();
@@ -229,7 +196,6 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     let mut writer = AsyncBufWriter::new(file);
 
     writer.write_all(header.as_bytes()).await?;
-    println!("Header written successfully");
 
     for (url, rules) in &source_data {
         writer
