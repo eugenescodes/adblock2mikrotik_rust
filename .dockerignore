@@ -1,50 +1,37 @@
+# Git and Docker configuration
+.git/
+.github/
+.gitignore
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
 # OS & Editor configurations
 .idea/
 .vscode/
-*.swp
-*.swo
 .DS_Store
 Thumbs.db
 
 # Environment variables
 .env
 .env.*
-!.env.example
-
-# Logs and databases
-*.log
-*.sqlite3
-*.db
 
 # -----------------------
 # Python
 # -----------------------
-# Byte-compiled / optimized / DLL files
+# Avoid copying local environments and caches
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
 .venv/
 venv/
-
-# Tooling caches
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
-.tox/
-.coverage
-htmlcov/
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
 
 # -----------------------
 # Rust
 # -----------------------
-# Build artifacts
+# Avoid copying local build targets, let Docker compile it
 target/
 
 # Cargo backup files
