@@ -1,4 +1,4 @@
-name: Build and Test
+name: Pipeline
 
 permissions:
   contents: write
@@ -15,19 +15,26 @@ on:
   pull_request:
     branches:
       - main
+  schedule:
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: BUILD, FORMAT & TEST (Run only on Push/PR/Dispatch)
+  # ─────────────────────────────────────────────
   build:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Set up Rust
@@ -36,7 +43,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo registry
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -52,11 +59,24 @@ jobs:
         run: cargo fmt --all
 
       - name: Commit and push formatting
+        if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff-index --quiet HEAD || (git commit -m "auto-format code" && git push)
+          
+          export GIT_MERGE_AUTOEDIT=no
+          export GIT_TERMINAL_PROMPT=0
+
+          BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
+
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Auto-fix formatting (cargo fmt)"
+            git pull --rebase --no-edit origin "$BRANCH_NAME"
+            git push origin "HEAD:refs/heads/$BRANCH_NAME"
+          else
+            echo "No formatting changes to commit."
+          fi
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -67,7 +87,7 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-   # --- fast check docker with GHA-cache ---
+      # --- fast check docker with GHA-cache ---
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -83,3 +103,50 @@ jobs:
 
       - name: Verify container startup and dependency compatibility
         run: docker run --rm adblock2mikrotik_rust:ci-test
+
+  # ─────────────────────────────────────────────
+  # JOB 2: UPDATE HOSTS (Run only on Schedule or Dispatch)
+  # ─────────────────────────────────────────────
+  update-hosts:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-cron-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cron-
+
+      - name: Run conversion script
+        run: cargo run --release
+
+      - name: Commit and push hosts.txt
+        run: |
+          if [[ -n $(git status --porcelain hosts.txt) ]]; then
+            git add hosts.txt
+            git commit -m "Update hosts.txt via schedule"
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "No changes to commit."
+          fi
