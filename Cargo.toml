@@ -8,7 +8,7 @@ encoding_rs = "0.8.35 "
 reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
 regex = "1.12.3"
 chrono = "0.4.44"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.50.0", features = ["full"] }
 lazy_static = "1.5.0"
 anyhow = "1.0.102"
 
