@@ -7,6 +7,7 @@ async fn main() -> io::Result<()> {
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt",
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/gambling.mini.txt",
+        // add more URLs as needed
     ];
     run(urls).await
 }
@@ -18,16 +19,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_no_rules_no_file_written() {
-        // Remove hosts.txt if exists
+        // Ensure OUTPUT_DIR is not set so the default path (CWD/hosts.txt) is used
+        std::env::remove_var("OUTPUT_DIR");
         let _ = fs::remove_file("hosts.txt");
 
-        // Run with empty URLs to simulate no fetching
         let result = run(vec![]).await;
 
-        // Assert run completed successfully
         assert!(result.is_ok());
 
-        // Assert hosts.txt does not exist
         let file_exists = fs::metadata("hosts.txt").is_ok();
         assert!(
             !file_exists,

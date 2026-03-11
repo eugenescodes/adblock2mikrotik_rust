@@ -1,191 +1,154 @@
+# adblock2mikrotik_rust
+
+Convert ad-blocking filter lists to MikroTik RouterOS DNS adlist format.
+
 > [!NOTE]
-> This repository provides a Rust version of the - <https://github.com/eugenescodes/adblock2mikrotik>
+> This is a Rust rewrite of [adblock2mikrotik](https://github.com/eugenescodes/adblock2mikrotik)
 
 > [!TIP]
-> URL to add in RouterOS: <https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt>
-
-# adblock2mikrotik - AdBlock to MikroTik Hosts Format Converter
-
-Convert AdBlock filter lists to a hosts format list compatible with MikroTik RouterOS DNS adlist.
+> Ready-to-use URL for RouterOS:
+> `https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt`
 
 ## Overview
 
-A conversion utility designed to transform popular ad-blocking filter lists in AdBlock format into a compact, memory-efficient hosts format list compatible with MikroTik RouterOS 7.15+ DNS adlist feature.
+Transforms popular ad-blocking filter lists (Hagezi) into a compact format compatible with the MikroTik RouterOS 7.15+ DNS adlist feature.
+Optimized for memory-constrained low-resource devices like the [RB951Ui-2nD hAP](https://mikrotik.com/product/RB951Ui-2nD) (which has 16 MB storage).
 
-### Source Filter Lists
+### Sources
 
-- Hagezi [Multi PRO mini](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#ledger-multi-pro-mini-recommended-for-browsermobile-adblockers-): --> [link to file on adblock format](https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt)
-- Hagezi [Threat Intelligence Feeds - Mini version](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#closed_lock_with_key-threat-intelligence-feeds---mini-version-): --> [link to file on adblock format](https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt)
-- Hagezi [Gambling - Mini version](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#slot_machine-gambling---mini-version-): --> [link to file on adblock format](https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/gambling.mini.txt)
-
-The primary goal is to create a minimal, optimized host file that addresses the limited memory constraints of low-resource devices like the ```hAP series``` (which has 16 MB storage but less than 3 MB free after upgrading to RouterOS 7), for example the [RB951Ui-2nD hAP](https://mikrotik.com/product/RB951Ui-2nD) router
+| List | Description |
+| --- | --- |
+| [Hagezi Multi PRO mini](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#ledger-multi-pro-mini-recommended-for-browsermobile-adblockers-) | General ad/tracker blocking |
+| [Hagezi TIF mini](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#closed_lock_with_key-threat-intelligence-feeds---mini-version-) | Threat intelligence feeds |
+| [Hagezi Gambling mini](https://github.com/hagezi/dns-blocklists?tab=readme-ov-file#slot_machine-gambling---mini-version-) | Gambling sites |
 
 ## Features
 
-- Converts AdBlock syntax to a hosts format list compatible with MikroTik DNS adlist
-- Removes duplicates and optimizes storage space
-- Supports multiple input filter list formats
-- Compatible with RouterOS 7.15 and newer
-- Preserves only domain-based rules
-- Removes comments and unnecessary elements
+- Converts `||example.com^` rules to MikroTik DNS adlist format (`0.0.0.0 example.com`)
+- Deduplicates entries across all sources
+- Strips comments and unsupported rule types
+- Compatible with RouterOS 7.15+
 
-Supports common AdBlock syntax filter rules, including:
+## Usage
 
-- Domain rules (`||example.com^`)
-- Basic URL rules
-- Comment lines (automatically removed)
-
-Generates a clean list of domains in MikroTik DNS adlist format:
-
-```text
-0.0.0.0 example.com
-0.0.0.0 ads.example.net
-0.0.0.0 tracking.example.org
-```
-
-## Use on MikroTik
-
-How to implement DNS adblocking on MikroTik RouterOS 7.15+ using online blocklists. You must have active internet connection and basic RouterOS configuration knowledge.
-To add a URL-based adlist for DNS adblocking, use the following command in the router terminal:
-
-```routeros
-/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=no
-```
-
-If you want to use properties -`ssl-verify=yes` you can download and import [CA certificates](https://curl.se/docs/caextract.html) use next commands:
-
-```routeros
-/tool fetch url=https://curl.se/ca/cacert.pem
-```
-
-The resulting output should be:
-
-```routeros
-      status: finished
-  downloaded: 225KiB  
-       total: 225KiB  
-    duration: 1s 
-```
-
-Then run next command:
-
-```routeros
-/certificate import file-name=cacert.pem passphrase=""                                                  
-```
-
-Output should be:
-
-```routeros
-certificates-imported: 149
-     private-keys-imported:   0
-            files-imported:   0
-       decryption-failures:   0
-  keys-with-no-certificate:   0
-```
-
-After that run next command:
-
-```routeros
-/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=yes
-```
-
-For a comprehensive guide on DNS adblocking and adlist configuration, refer to the official MikroTik documentation:
-
-- [DNS Adlist - MikroTik Documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS#DNS-Adlist)
-- [Certificates - MikroTik Documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/2555969/Certificates)
-
-## Use on local
-
-### Prerequisites
-
-- Rust and Cargo [installed on your system](https://rust-lang.org/tools/install/)
-
-To use the tool locally, follow these steps:
-
-1. Clone the repository and navigate into the project directory:
+### Option 1 — Cargo (recommended)
 
 ```bash
-git clone https://github.com/eugenescodes/adblock2mikrotik_rust.git
+# Install Rust if not already installed
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone and run
+git clone https://github.com/eugenescodes/adblock2mikrotik_rust
 cd adblock2mikrotik_rust
-```
-
-1. Build the project in release mode:
-
-```bash
-cargo build --release
-```
-
-1. Run the application:
-
-```bash
 cargo run --release
 ```
 
-This will generate or update the `hosts.txt` file in the project directory.
+After running, `hosts.txt` is created in the current directory.
 
-## Docker Usage
-
-### Quick Start
-
-1. Build the Docker image:
+### Option 2 — Docker
 
 ```bash
 docker build -t adblock2mikrotik_rust .
 ```
 
-1. Run the container to generate `hosts.txt`.
-
 > [!IMPORTANT]
-> If `hosts.txt` does not exist in your current directory, Docker might create it as a directory. To avoid this, create the file first:
+> If `hosts.txt` does not exist in your current directory, Docker might create it as a directory. Create the file first:
 >
 > ```bash
 > touch hosts.txt
 > ```
 
-Then run the container:
-
 ```bash
-docker run --rm -v $(pwd):/app adblock2mikrotik_rust
+# Linux / macOS
+docker run --rm --user $(id -u):$(id -g) -v "$(pwd)":/output adblock2mikrotik_rust
+
+# Windows (PowerShell)
+docker run --rm -v "${PWD}:/output" adblock2mikrotik_rust
 ```
 
-### Troubleshooting
+> [!NOTE]
+> The `-v` flag mounts your current directory into the container at `/output`.
+> The binary writes `hosts.txt` to `/output`, so the file appears directly
+> in your current directory on the host — no manual copying needed.
+>
+> On Linux, `--user $(id -u):$(id -g)` ensures the output file is owned by
+> your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
 
-If you encounter an error like `Failed to create file: Is a directory (os error 21)`, it's because `hosts.txt` was created as a directory by Docker (this happens when you mount a non-existent file path). To fix this, remove the directory and create an empty file:
+## MikroTik RouterOS Integration
 
-```bash
-rm -rf hosts.txt
-touch hosts.txt
+### Add adlist via URL
+
+```routeros
+/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=no
 ```
 
-### What It Does
+### Optional: enable SSL verification
 
-The container will:
+If you want to use `ssl-verify=yes`, you can download and import [CA certificates](https://curl.se/docs/caextract.html) using the following commands:
 
-- Fetch the latest filter lists
-- Convert AdBlock format to MikroTik hosts format
-- Save the result to `hosts.txt` in your current directory
+```routeros
+/tool fetch url=https://curl.se/ca/cacert.pem
+/certificate import file-name=cacert.pem passphrase=""
+/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=yes
+```
 
-## Upload Generated File to MikroTik
-
-To apply the generated hosts file on your MikroTik RouterOS, upload the `hosts.txt` file to the router and add it as a DNS adlist:
+### Add adlist from local file
 
 ```routeros
 /ip/dns/adlist add file=hosts.txt
 ```
 
-For more detailed information on DNS adblocking and adlist configuration, refer to the official MikroTik documentation:
+See also the official MikroTik documentation:
 
 - [DNS Adlist - MikroTik Documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/37748767/DNS#DNS-Adlist)
+- [Certificates - MikroTik Documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/2555969/Certificates)
+
+## Development
+
+This project uses [Cargo](https://doc.rust-lang.org/cargo/) for dependency management and [Clippy](https://github.com/rust-lang/rust-clippy) + [rustfmt](https://github.com/rust-lang/rustfmt) for linting/formatting.
+
+### Prerequisites
+
+Install Rust via [rustup](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Lint and format
+
+```bash
+# format
+cargo fmt --all  
+
+# lint
+cargo clippy --all-targets --all-features -- -D warnings  
+```
+
+### Tests
+
+```bash
+cargo test --verbose
+cargo test --doc
+```
+
+## Contributing
+
+1. Open a [GitHub issue](https://github.com/eugenescodes/adblock2mikrotik_rust/issues) to discuss major changes before starting work.
+2. Fork the repo and create a feature branch: `git checkout -b feature/your-feature`
+3. Make your changes and run tests: `cargo test --verbose`
+4. Commit with a clear message and push to your fork.
+5. Open a Pull Request targeting `main` with a description of what and why.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+[GNU GPL v3.0](LICENSE)
 
 ## Acknowledgments
 
-- Hagezi communities for maintaining comprehensive filter lists
-- MikroTik for implementing DNS adlist feature in RouterOS 7.15
+- [Hagezi](https://github.com/hagezi/dns-blocklists) for maintaining comprehensive filter lists
+- MikroTik for the DNS adlist feature in RouterOS 7.15+
 
-## Note
+---
 
-This tool is not affiliated with MikroTik
+> This tool is not affiliated with MikroTik.

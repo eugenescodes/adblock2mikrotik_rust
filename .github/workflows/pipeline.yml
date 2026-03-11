@@ -4,38 +4,37 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ─────────────────────────────────────────────
-  # JOB 1: BUILD, FORMAT & TEST (Run only on Push/PR/Dispatch)
+  # JOB 1: LINT & TEST — push / PR / dispatch
+  # Fast feedback: no Docker, no network calls.
   # ─────────────────────────────────────────────
-  build:
+  lint-and-test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,23 +54,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Auto-format code
+      - name: Lint and fix Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v22
+        with:
+          fix: true
+          globs: '**/*.md'
+        continue-on-error: true
+
+      - name: Run cargo fmt
         run: cargo fmt --all
 
-      - name: Commit and push formatting
+      - name: Commit and push formatting fixes
         if: github.event_name == 'push'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
           export GIT_MERGE_AUTOEDIT=no
           export GIT_TERMINAL_PROMPT=0
-
           BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
-
           if [ -n "$(git status --porcelain)" ]; then
             git add .
-            git commit -m "Auto-fix formatting (cargo fmt)"
+            git commit -m "Auto-fix formatting (Markdown & cargo fmt)"
             git pull --rebase --no-edit origin "$BRANCH_NAME"
             git push origin "HEAD:refs/heads/$BRANCH_NAME"
           else
@@ -87,11 +88,21 @@ jobs:
       - name: Run doc tests
         run: cargo test --doc
 
-      # --- fast check docker with GHA-cache ---
+  # ─────────────────────────────────────────────
+  # JOB 2: DOCKER BUILD CHECK — push to main + dispatch only
+  # Skipped on PRs to save CI minutes.
+  # ─────────────────────────────────────────────
+  docker-build:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build Docker Image (Dry Run)
+      - name: Build Docker Image with GHA Cache
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -101,11 +112,12 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Verify container startup and dependency compatibility
-        run: docker run --rm adblock2mikrotik_rust:ci-test
+      - name: Verify image — binary runs, no network
+        run: |
+          docker run --rm --network none adblock2mikrotik_rust:ci-test --version
 
   # ─────────────────────────────────────────────
-  # JOB 2: UPDATE HOSTS (Run only on Schedule or Dispatch)
+  # JOB 3: UPDATE HOSTS — schedule + dispatch
   # ─────────────────────────────────────────────
   update-hosts:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -118,8 +130,8 @@ jobs:
 
       - name: Configure git identity
         run: |
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -137,7 +149,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-cron-
 
-      - name: Run conversion script
+      - name: Run conversion
         run: cargo run --release
 
       - name: Commit and push hosts.txt

@@ -4,6 +4,7 @@ use encoding_rs::UTF_8;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 lazy_static! {
     static ref COMMENT_RE: Regex = Regex::new(r"#.*$").unwrap();
@@ -54,39 +55,64 @@ pub fn convert_rule(rule: &str) -> Option<String> {
 }
 
 pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<String>> {
-    // Use the shared client passed as an argument
-    let response = client
-        .get(url)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .with_context(|| format!("Failed to send request to {}", url))?;
+    // Retry-logic: 3 attempts with exponential backoff: 2s → 4s (no wait after final attempt)
+    let max_attempts = 3;
+    let mut last_error: Option<anyhow::Error> = None;
 
-    if response.status().is_success() {
-        // Get raw bytes instead of text() to handle encoding manually
-        let bytes = response
-            .bytes()
+    for attempt in 0..max_attempts {
+        let result = client
+            .get(url)
+            .send()
             .await
-            .with_context(|| format!("Failed to read response bytes from {}", url))?;
+            .with_context(|| format!("Failed to send request to {}", url));
 
-        // Use encoding_rs to decode. It handles BOM and replaces invalid characters
-        // with the replacement character () instead of panicking.
-        let (decoded_cow, _had_errors) = UTF_8.decode_with_bom_removal(&bytes);
+        match result {
+            Ok(response) if response.status().is_success() => {
+                // Get raw bytes instead of text() to handle encoding manually
+                let bytes = response
+                    .bytes()
+                    .await
+                    .with_context(|| format!("Failed to read response bytes from {}", url))?;
 
-        // Convert to owned String
-        let content = decoded_cow.into_owned();
+                // Use encoding_rs to decode. It handles BOM and replaces invalid characters
+                // with the replacement character () instead of panicking.
+                let (decoded_cow, _had_errors) = UTF_8.decode_with_bom_removal(&bytes);
 
-        let rules: Vec<String> = content
-            .lines()
-            .map(|line: &str| line.trim().to_string())
-            .filter(|line: &String| !line.is_empty())
-            .collect();
+                let rules: Vec<String> = decoded_cow
+                    .lines()
+                    .map(|line| line.trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect();
 
-        Ok(rules)
-    } else {
-        // This line is uncovered by tests due to error handling
-        anyhow::bail!("Error fetching {}: HTTP {}", url, response.status());
+                return Ok(rules);
+            }
+            Ok(response) => {
+                last_error = Some(anyhow::anyhow!(
+                    "Error fetching {}: HTTP {}",
+                    url,
+                    response.status()
+                ));
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+
+        if attempt < max_attempts - 1 {
+            let wait_secs = 2u64.pow(attempt as u32 + 1); // 2s, then 4s
+            println!(
+                "Attempt {} failed for {}. Retrying in {}s...",
+                attempt + 1,
+                url,
+                wait_secs
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+        }
     }
+
+    Err(last_error.unwrap_or_else(|| {
+        anyhow::anyhow!("Error fetching {} after {} attempts", url, max_attempts)
+    }))
 }
 
 // Helper function to format numbers with commas (e.g., 76376 -> "76,376")
@@ -103,24 +129,45 @@ fn format_with_commas(n: usize) -> String {
 }
 
 pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
-    let _start_time = std::time::Instant::now();
+    let start_time = std::time::Instant::now();
 
     // Create a single Client instance to reuse connections (Keep-Alive)
     let client = reqwest::Client::builder()
-        .http1_only()
+        .connect_timeout(std::time::Duration::from_secs(3))
         .build()
         .expect("Failed to build reqwest client");
 
     let mut unique_rules: HashSet<String> = HashSet::new();
     let mut source_data: Vec<(String, Vec<String>)> = Vec::new();
 
-    // Fetch and convert sequentially so output is grouped per source
-    for url in urls {
-        let url = url.to_string();
-        println!("Fetching: {}", url);
-        match fetch_rules(&client, &url).await {
+    println!("Starting conversion of {} source(s)...\n", urls.len());
+
+    // Fetch all sources in parallel, preserving original URL order (matches Python ThreadPoolExecutor)
+    let fetch_futures: Vec<_> = urls
+        .iter()
+        .map(|url| {
+            let url = url.to_string();
+            let client = client.clone();
+            async move {
+                println!("Fetching: {}\n", url);
+                let result = fetch_rules(&client, &url).await;
+                (url, result)
+            }
+        })
+        .collect();
+
+    let results = futures::future::join_all(fetch_futures).await;
+
+    // Process results in original URL order:
+    // source_data = {url: source_data[url] for url in urls if url in source_data}
+    for (url, result) in results {
+        match result {
             Ok(rules) => {
-                println!("Fetched {} lines", format_with_commas(rules.len()));
+                println!(
+                    "Fetched {} lines\nfrom {}",
+                    format_with_commas(rules.len()),
+                    url
+                );
                 let mut converted: Vec<String> = Vec::new();
                 for rule in rules.iter() {
                     if let Some(result) = convert_rule(rule) {
@@ -151,11 +198,9 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     // Build header with all stats and info at the top
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
 
-    // Prepare lines before header (same pattern as Python version)
-    let url_lines: String = source_data
-        .iter()
-        .map(|(url, _)| format!("# - {url}\n"))
-        .collect();
+    // Prepare lines before header to list all source URLs and their unique domain counts
+    // Uses original urls list so failed sources still appear in the header
+    let url_lines: String = urls.iter().map(|url| format!("# - {url}\n")).collect();
 
     let source_lines: String = source_data
         .iter()
@@ -186,41 +231,42 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
          #\n"
     );
 
-    use tokio::fs::File as TokioFile;
-    use tokio::io::{AsyncWriteExt, BufWriter as AsyncBufWriter};
+    // OUTPUT_DIR is set in Docker to /output (a dedicated writable volume).
+    // When running locally (cargo run), OUTPUT_DIR is not set -> writes to CWD.
+    let output_file: PathBuf = match std::env::var("OUTPUT_DIR") {
+        Ok(dir) => PathBuf::from(dir).join("hosts.txt"),
+        Err(_) => PathBuf::from("hosts.txt"),
+    };
 
-    let file = TokioFile::create("hosts.txt").await.map_err(|e| {
-        eprintln!("Failed to create file: {e}");
-        e
-    })?;
-    let mut writer = AsyncBufWriter::new(file);
-
-    writer.write_all(header.as_bytes()).await?;
+    // Build the complete content as a string
+    let mut content = header;
 
     for (url, rules) in &source_data {
-        writer
-            .write_all(format!("\n# Source: {url}\n\n").as_bytes())
-            .await?;
+        content.push_str(&format!("\n# Source: {url}\n\n"));
         for rule in rules {
-            writer.write_all(format!("{rule}\n").as_bytes()).await?;
+            content.push_str(&format!("{rule}\n"));
         }
-        writer
-            .write_all(
-                format!("\n# Converted {:} rules from this source\n\n", rules.len()).as_bytes(),
-            )
-            .await?;
+        content.push_str(&format!(
+            "\n# Converted {:} rules from this source\n\n",
+            rules.len()
+        ));
     }
 
-    writer
-        .write_all(format!("\n# Total unique domains: {total_unique}\n").as_bytes())
-        .await?;
+    content.push_str(&format!("\n# Total unique domains: {total_unique}\n"));
 
-    writer.flush().await?;
+    // Write all content at once
+    tokio::fs::write(&output_file, &content)
+        .await
+        .map_err(|e| {
+            eprintln!("Failed to write file: {e}");
+            e
+        })?;
     println!(
         "Total unique domains across all sources: {}",
         format_with_commas(total_unique)
     );
-    println!("Done! Written to: hosts.txt");
+    println!("Done! Written to: {}", output_file.display());
+    println!("Elapsed: {:.2?}", start_time.elapsed());
 
     Ok(())
 }
@@ -228,43 +274,6 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_fetch_rules_real_request() {
-        // Create a client specifically for the test
-        let client = reqwest::Client::builder().http1_only().build().unwrap();
-
-        // Use some stable URL (or better - mock server, but for simplicity this is fine)
-        // Note: this test requires internet
-        let url = "https://www.google.com/robots.txt";
-
-        let result = fetch_rules(&client, url).await;
-
-        // Check that we got something and it is not an error
-        assert!(result.is_ok());
-        let lines = result.unwrap();
-        assert!(!lines.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_run_no_rules_no_file_written() {
-        use std::fs;
-        // Remove hosts.txt if exists
-        let _ = fs::remove_file("hosts.txt");
-
-        // Run with empty URLs to simulate no fetching
-        let result = run(vec![]).await;
-
-        // Assert run completed successfully
-        assert!(result.is_ok());
-
-        // Assert hosts.txt does not exist
-        let file_exists = fs::metadata("hosts.txt").is_ok();
-        assert!(
-            !file_exists,
-            "hosts.txt should not be created when no rules fetched"
-        );
-    }
 
     #[test]
     fn test_convert_unique_rules_only() {
