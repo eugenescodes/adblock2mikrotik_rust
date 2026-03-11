@@ -1,17 +1,22 @@
 version: 2
 updates:
+  
+  # Configuration for GitHub Actions workflows
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      # Check for updates to GitHub Actions every day
       interval: daily
+
+  # Configuration for Rust dependencies managed by Cargo
   - package-ecosystem: cargo
     directory: /
     schedule:
-      # Check for updates to cargo every day
       interval: daily
+
+  # Configuration for Docker dependencies
   - package-ecosystem: docker
     directory: /
     schedule:
-      # Check for updates to Docker base images every day
-      interval: daily
+      interval: weekly
+      # Disable all pull requests for Docker dependencies
+    open-pull-requests-limit: 1
