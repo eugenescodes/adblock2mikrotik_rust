@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use encoding_rs::UTF_8;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+
+/// Prefix used in every output entry. Length is used to extract the domain part.
+const ENTRY_PREFIX: &str = "0.0.0.0 ";
 
 /// Validates a domain label (single segment between dots).
 /// Rules: non-empty, max 63 chars, alphanumeric + hyphens, no leading/trailing hyphen.
@@ -83,7 +84,7 @@ pub fn convert_rule(rule: &str) -> Option<String> {
     let domain = rest.split('^').next()?.split('$').next()?;
 
     if is_valid_domain(domain) {
-        Some(format!("0.0.0.0 {domain}"))
+        Some(format!("{ENTRY_PREFIX}{domain}"))
     } else {
         None
     }
@@ -176,10 +177,9 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         .build()
         .expect("Failed to build reqwest client");
 
-    // HashSet<u64> stores domain hashes instead of full strings —
-    // avoids one heap allocation per unique domain (was HashSet<String>)
+    // HashSet<String> stores domain strings for uniqueness checking
     // Pre-allocate for expected ~300k domains to avoid rehashing
-    let mut seen_hashes: HashSet<u64> = HashSet::with_capacity(300_000);
+    let mut seen_domains: HashSet<String> = HashSet::with_capacity(300_000);
     let mut source_data: Vec<(String, Vec<String>)> = Vec::new();
 
     println!("Starting conversion of {} source(s)...\n", urls.len());
@@ -217,10 +217,9 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
                 let mut converted: Vec<String> = Vec::new();
                 for rule in rules.iter() {
                     if let Some(entry) = convert_rule(rule) {
-                        // Hash the domain part only (skip "0.0.0.0 " prefix = 8 chars)
-                        let mut hasher = DefaultHasher::new();
-                        entry[8..].hash(&mut hasher);
-                        if seen_hashes.insert(hasher.finish()) {
+                        // Extract domain part by stripping the fixed prefix
+                        let domain = entry[ENTRY_PREFIX.len()..].to_string();
+                        if seen_domains.insert(domain) {
                             converted.push(entry);
                         }
                     }
@@ -237,12 +236,12 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         }
     }
 
-    if source_data.is_empty() {
-        eprintln!("No rules fetched. Skipping writing hosts.txt.");
+    if seen_domains.is_empty() {
+        eprintln!("Warning: No valid rules were converted. Skipping writing to file.");
         return Ok(());
     }
 
-    let total_unique = seen_hashes.len();
+    let total_unique = seen_domains.len();
 
     // Build header with all stats and info at the top
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
@@ -331,38 +330,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_convert_unique_rules_only() {
+    fn test_dedup_via_seen_domains() {
+        // Mirrors the dedup logic in run(): convert each rule, insert domain into
+        // seen_domains — dedup happens after parsing, not on raw rule strings.
+        // Key case: "||example.com^" and "||example.com^ # comment" are different
+        // raw strings but produce the same domain — only one must appear in output.
         let rules = vec![
             "||example.com^",
-            "||example.com^ # comment",
+            "||example.com^ # comment", // same domain after parsing — must be deduped
             "||test.com^",
-            "||test.com^ # comment",
+            "||test.com^ # comment", // same domain after parsing — must be deduped
             "||invalid_domain^",
             "# just a comment",
         ];
-        let mut unique_raw_rules = std::collections::HashSet::<String>::new();
-        let mut deduped_rules = Vec::new();
-        for rule in rules {
-            if unique_raw_rules.insert(rule.to_string()) {
-                deduped_rules.push(rule.to_string());
-            }
-        }
-        let mut unique_converted = std::collections::HashSet::<String>::new();
-        let mut converted_rules = Vec::new();
-        for rule in deduped_rules {
-            if let Some(converted) = super::convert_rule(&rule) {
-                if unique_converted.insert(converted.clone()) {
-                    converted_rules.push(converted);
+        let mut seen_domains: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut converted: Vec<String> = Vec::new();
+        for rule in &rules {
+            if let Some(entry) = convert_rule(rule) {
+                let domain = entry[ENTRY_PREFIX.len()..].to_string();
+                if seen_domains.insert(domain) {
+                    converted.push(entry);
                 }
             }
         }
-        assert_eq!(
-            converted_rules,
-            vec![
-                "0.0.0.0 example.com".to_string(),
-                "0.0.0.0 test.com".to_string()
-            ]
-        );
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[0], "0.0.0.0 example.com");
+        assert_eq!(converted[1], "0.0.0.0 test.com");
     }
     #[test]
     fn test_convert_rule_domain_with_dash() {
@@ -443,9 +436,15 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_rule_regex_error_handling() {
-        // This simulates a regex error by temporarily replacing the function
-        let rule = "||example.com^";
-        convert_rule(rule);
+    fn test_convert_rule_unicode_in_domain() {
+        // Unicode chars are not ASCII alphanumeric — must be rejected
+        assert_eq!(convert_rule("||café.com^"), None);
+        assert_eq!(convert_rule("||例え.jp^"), None);
+    }
+
+    #[test]
+    fn test_convert_rule_leading_trailing_hyphen() {
+        assert_eq!(convert_rule("||-example.com^"), None);
+        assert_eq!(convert_rule("||example-.com^"), None);
     }
 }
