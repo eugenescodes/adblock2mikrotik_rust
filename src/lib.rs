@@ -1,18 +1,54 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use encoding_rs::UTF_8;
-use lazy_static::lazy_static;
-use regex::Regex;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-lazy_static! {
-    static ref COMMENT_RE: Regex = Regex::new(r"#.*$").unwrap();
-    // Slightly strengthened the regex for domains (will not allow completely strange characters)
-    static ref DOMAIN_RE: Regex = Regex::new(r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$").unwrap();
+/// Validates a domain label (single segment between dots).
+/// Rules: non-empty, max 63 chars, alphanumeric + hyphens, no leading/trailing hyphen.
+fn is_valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && !label.starts_with('-')
+        && !label.ends_with('-')
+        && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Validates a domain without regex — replaces DOMAIN_RE.
+/// Equivalent to: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$
+fn is_valid_domain(domain: &str) -> bool {
+    // Single pass: validate all labels, track last one for TLD check
+    let mut iter = domain.split('.');
+    let mut prev: Option<&str> = None;
+    let mut label_count = 0;
+
+    for label in iter.by_ref() {
+        if let Some(p) = prev {
+            // Validate all non-TLD labels as we go
+            if !is_valid_label(p) {
+                return false;
+            }
+        }
+        prev = Some(label);
+        label_count += 1;
+    }
+
+    // Need at least label + TLD (e.g. "example.com")
+    if label_count < 2 {
+        return false;
+    }
+
+    // Last label is TLD: only ASCII alpha, at least 2 chars
+    match prev {
+        Some(tld) => tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()),
+        None => false,
+    }
 }
 
 /// Converts an adblock rule to a hosts file entry, or returns None if invalid.
+/// Uses manual string parsing instead of regex for better performance on large inputs.
 ///
 /// # Examples
 ///
@@ -30,28 +66,27 @@ lazy_static! {
 /// assert_eq!(convert_rule("||invalid_domain^"), None);
 /// ```
 pub fn convert_rule(rule: &str) -> Option<String> {
-    // Remove comments and whitespace
-    let rule = COMMENT_RE.replace(rule, "").trim().to_string();
+    // Strip inline comment without allocation (replaces COMMENT_RE.replace())
+    let rule = match rule.find('#') {
+        Some(pos) => rule[..pos].trim(),
+        None => rule.trim(),
+    };
 
     if rule.is_empty() {
         return None;
     }
 
-    // Handle different rule formats
-    if rule.starts_with("||") && rule.contains("^") {
-        let domain = rule[2..]
-            .split('^')
-            .next()
-            .unwrap_or("")
-            .split('$')
-            .next()
-            .unwrap_or("");
-        // Basic domain validation
-        if DOMAIN_RE.is_match(domain) {
-            return Some(format!("0.0.0.0 {domain}"));
-        }
+    // Must start with "||" — strip_prefix returns None otherwise
+    let rest = rule.strip_prefix("||")?;
+
+    // Take domain: up to first '^', then up to first '$' (for option modifiers)
+    let domain = rest.split('^').next()?.split('$').next()?;
+
+    if is_valid_domain(domain) {
+        Some(format!("0.0.0.0 {domain}"))
+    } else {
+        None
     }
-    None
 }
 
 pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<String>> {
@@ -78,10 +113,14 @@ pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<Stri
                 // with the replacement character () instead of panicking.
                 let (decoded_cow, _had_errors) = UTF_8.decode_with_bom_removal(&bytes);
 
+                // Filter before allocating: skip empty and comment-only lines early
                 let rules: Vec<String> = decoded_cow
                     .lines()
+                    .filter(|line| {
+                        let t = line.trim_start();
+                        !t.is_empty() && !t.starts_with('#')
+                    })
                     .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
                     .collect();
 
                 return Ok(rules);
@@ -137,42 +176,52 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         .build()
         .expect("Failed to build reqwest client");
 
-    let mut unique_rules: HashSet<String> = HashSet::new();
+    // HashSet<u64> stores domain hashes instead of full strings —
+    // avoids one heap allocation per unique domain (was HashSet<String>)
+    // Pre-allocate for expected ~300k domains to avoid rehashing
+    let mut seen_hashes: HashSet<u64> = HashSet::with_capacity(300_000);
     let mut source_data: Vec<(String, Vec<String>)> = Vec::new();
 
     println!("Starting conversion of {} source(s)...\n", urls.len());
 
-    // Fetch all sources in parallel, preserving original URL order (matches Python ThreadPoolExecutor)
-    let fetch_futures: Vec<_> = urls
-        .iter()
-        .map(|url| {
-            let url = url.to_string();
-            let client = client.clone();
-            async move {
-                println!("Fetching: {}\n", url);
-                let result = fetch_rules(&client, &url).await;
-                (url, result)
-            }
-        })
-        .collect();
+    // Fetch all sources in parallel using tokio::task::JoinSet (no extra crate needed)
+    // Preserving original URL order via indexed results
+    let mut join_set = tokio::task::JoinSet::new();
+    for (i, url) in urls.iter().enumerate() {
+        let url = url.to_string();
+        let client = client.clone();
+        join_set.spawn(async move {
+            let t = std::time::Instant::now();
+            let result = fetch_rules(&client, &url).await;
+            let elapsed = t.elapsed();
+            (i, url, result, elapsed)
+        });
+    }
 
-    let results = futures::future::join_all(fetch_futures).await;
+    // Collect results indexed by original position, then sort to restore URL order
+    let mut indexed_results = Vec::with_capacity(urls.len());
+    while let Some(res) = join_set.join_next().await {
+        indexed_results.push(res.expect("task panicked"));
+    }
+    indexed_results.sort_unstable_by_key(|(i, _, _, _)| *i);
 
-    // Process results in original URL order:
-    // source_data = {url: source_data[url] for url in urls if url in source_data}
-    for (url, result) in results {
+    for (_, url, result, fetch_elapsed) in indexed_results {
         match result {
             Ok(rules) => {
                 println!(
-                    "Fetched {} lines\nfrom {}",
+                    "Fetched {} lines from {} ({:.2?})",
                     format_with_commas(rules.len()),
-                    url
+                    url,
+                    fetch_elapsed
                 );
                 let mut converted: Vec<String> = Vec::new();
                 for rule in rules.iter() {
-                    if let Some(result) = convert_rule(rule) {
-                        if unique_rules.insert(result.clone()) {
-                            converted.push(result);
+                    if let Some(entry) = convert_rule(rule) {
+                        // Hash the domain part only (skip "0.0.0.0 " prefix = 8 chars)
+                        let mut hasher = DefaultHasher::new();
+                        entry[8..].hash(&mut hasher);
+                        if seen_hashes.insert(hasher.finish()) {
+                            converted.push(entry);
                         }
                     }
                 }
@@ -193,7 +242,7 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         return Ok(());
     }
 
-    let total_unique = unique_rules.len();
+    let total_unique = seen_hashes.len();
 
     // Build header with all stats and info at the top
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
@@ -238,21 +287,27 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         Err(_) => PathBuf::from("hosts.txt"),
     };
 
-    // Build the complete content as a string
-    let mut content = header;
+    // Pre-allocate content buffer: header + avg 35 bytes per domain entry
+    let estimated_capacity = header.len() + total_unique * 35;
+    let mut content = String::with_capacity(estimated_capacity);
+    content.push_str(&header);
 
     for (url, rules) in &source_data {
-        content.push_str(&format!("\n# Source: {url}\n\n"));
+        content.push_str("\n# Source: ");
+        content.push_str(url);
+        content.push_str("\n\n");
         for rule in rules {
-            content.push_str(&format!("{rule}\n"));
+            content.push_str(rule);
+            content.push('\n'); // single char push — no format! allocation
         }
-        content.push_str(&format!(
-            "\n# Converted {:} rules from this source\n\n",
-            rules.len()
-        ));
+        content.push_str("\n# Converted ");
+        content.push_str(&format_with_commas(rules.len()));
+        content.push_str(" rules from this source\n\n");
     }
 
-    content.push_str(&format!("\n# Total unique domains: {total_unique}\n"));
+    content.push_str("\n# Total unique domains: ");
+    content.push_str(&total_unique.to_string());
+    content.push('\n');
 
     // Write all content at once
     tokio::fs::write(&output_file, &content)
