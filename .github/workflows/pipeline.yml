@@ -150,7 +150,8 @@ jobs:
             ${{ runner.os }}-cargo-cron-
 
       - name: Run conversion
-        run: cargo run --release
+      # remove --release for faster execution since this runs frequently
+        run: cargo run
 
       - name: Commit and push hosts.txt
         run: |

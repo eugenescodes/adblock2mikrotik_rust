@@ -1,5 +1,6 @@
 use adblock2mikrotik_rust::run;
 use serde::Deserialize;
+use std::env;
 use std::io;
 
 #[derive(Deserialize)]
@@ -50,6 +51,16 @@ fn load_config() -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // Check for version flag before loading config to avoid unnecessary file I/O
+    let args: Vec<String> = env::args().collect();
+    if args
+        .iter()
+        .any(|arg| arg == "--version" || arg == "-v" || arg == "-V")
+    {
+        println!("adblock2mikrotik_rust v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let urls = load_config();
     let url_refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
     run(url_refs).await
