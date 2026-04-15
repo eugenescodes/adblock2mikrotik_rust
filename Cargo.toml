@@ -8,7 +8,7 @@ encoding_rs = "0.8.35"
 reqwest = "0.13.2"
 chrono = "0.4.44"
 anyhow = "1.0.102"
-tokio = { version = "1.51", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 
@@ -16,4 +16,4 @@ toml = "1.1.2"
 mockito = "1.7.2"
 tempfile = "3.26.0"
 reqwest = "0.13.2"
-tokio = { version = "1.51", features = ["test-util"] }
+tokio = { version = "1.52", features = ["test-util"] }
