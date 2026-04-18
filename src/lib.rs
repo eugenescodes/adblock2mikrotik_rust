@@ -201,7 +201,8 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     // Collect results indexed by original position, then sort to restore URL order
     let mut indexed_results = Vec::with_capacity(urls.len());
     while let Some(res) = join_set.join_next().await {
-        indexed_results.push(res.expect("task panicked"));
+        let task_result = res.expect("task panicked");
+        indexed_results.push(task_result);
     }
     indexed_results.sort_unstable_by_key(|(i, _, _, _)| *i);
 

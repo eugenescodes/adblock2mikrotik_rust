@@ -89,7 +89,12 @@ mod tests {
         {
             let _guard = get_lock().lock().unwrap();
             cleanup_config();
-            std::env::remove_var("OUTPUT_DIR");
+            // SAFETY: The mutex guard ensures that no other test thread is accessing
+            // environment variables concurrently. All tests in this module that modify
+            // environment variables use the same lock, providing serialized access to
+            // the process-wide environment. This satisfies the safety requirements for
+            // modifying environment variables.
+            unsafe { std::env::remove_var("OUTPUT_DIR") };
         }
         let result = run(vec![]).await;
 
