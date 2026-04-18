@@ -31,11 +31,10 @@ fn load_config() -> Vec<String> {
                 println!("Loaded sources from {CONFIG_PATH}");
                 // If sources section exists, use its URLs (even if empty)
                 // If sources section doesn't exist, use defaults
-                let urls = match config.sources {
+                match config.sources {
                     Some(sources) => sources.urls.unwrap_or_default(),
                     None => SOURCES.iter().map(|s| s.to_string()).collect(),
-                };
-                urls
+                }
             }
             Err(e) => {
                 eprintln!("Warning: failed to parse {CONFIG_PATH}: {e}. Using default sources.");
