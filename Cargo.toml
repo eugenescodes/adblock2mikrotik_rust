@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 encoding_rs = "0.8.35"
-reqwest = "0.13.2"
+reqwest = "0.13.3"
 chrono = "0.4.44"
 anyhow = "1.0.102"
 tokio = { version = "1.52", features = ["full"] }
@@ -15,5 +15,5 @@ toml = "1.1.2"
 [dev-dependencies]
 mockito = "1.7.2"
 tempfile = "3.26.0"
-reqwest = "0.13.2"
+reqwest = "0.13.3"
 tokio = { version = "1.52", features = ["test-util"] }
