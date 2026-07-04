@@ -20,6 +20,7 @@ RUN mkdir src && \
 
 # Copy actual source code
 COPY src ./src
+COPY config.toml.example .
 
 # Compile and strip binary to reduce size
 RUN cargo build --release && \
