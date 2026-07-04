@@ -46,6 +46,14 @@ cargo run --release
 
 After running, `hosts.txt` is created in the current directory.
 
+### Check the version
+
+```bash
+cargo run --release -- --version
+# or, once built:
+./target/release/adblock2mikrotik_rust --version   # also accepts -v / -V
+```
+
 ### Option 2 — Docker
 
 ```bash
@@ -106,7 +114,7 @@ See also the official MikroTik documentation:
 
 ## Configuration
 
-By default, the script uses three pre-configured Hagezi filter lists. You can customize which sources are used by creating a `config.toml` file:
+By default, the script uses three pre-configured Hagezi filter lists (see [Sources](#sources) above). These defaults live in `config.toml.example` — the same file you copy to customize your own sources — and are embedded into the binary at compile time (`include_str!`), so they work regardless of where the binary runs, with no extra file needed alongside it. You can override them by creating a `config.toml` file:
 
 ### Customize sources
 
@@ -134,6 +142,17 @@ cargo run --release
 ```
 
 The script will automatically load sources from `config.toml`. If the file doesn't exist, it falls back to the default sources above.
+
+#### Using a custom `config.toml` with Docker
+
+The image only bundles the compiled binary — `config.toml.example` isn't copied in, and neither is your own `config.toml`. The binary looks for `config.toml` in its working directory, which is `/app` inside the container (see `WORKDIR /app` in the Dockerfile). Mount your file there:
+
+```bash
+docker run --rm --user $(id -u):$(id -g) \
+  -v "$(pwd)":/output \
+  -v "$(pwd)/config.toml":/app/config.toml:ro \
+  adblock2mikrotik_rust
+```
 
 ### Finding additional filter lists
 

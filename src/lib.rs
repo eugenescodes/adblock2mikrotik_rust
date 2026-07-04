@@ -207,13 +207,18 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     indexed_results.sort_unstable_by_key(|(i, _, _, _)| *i);
 
     for (_, url, result, fetch_elapsed) in indexed_results {
+        // Short filename (last URL path segment) — matches Python's
+        // url.split('/')[-1], used in progress output so long URLs don't
+        // clutter the console.
+        let short = url.split('/').next_back().unwrap_or(&url).to_string();
+
         match result {
             Ok(rules) => {
                 println!(
-                    "Fetched {} lines from {} ({:.2?})",
+                    "Fetched {} lines from {} ({:.2}s)",
                     format_with_commas(rules.len()),
-                    url,
-                    fetch_elapsed
+                    short,
+                    fetch_elapsed.as_secs_f64()
                 );
                 let mut converted: Vec<String> = Vec::new();
                 for rule in rules.iter() {
@@ -226,8 +231,9 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
                     }
                 }
                 println!(
-                    "Converted {} unique domains\n",
-                    format_with_commas(converted.len())
+                    "Converted {} unique domains from {}\n",
+                    format_with_commas(converted.len()),
+                    short
                 );
                 source_data.push((url, converted));
             }
@@ -309,19 +315,40 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     content.push_str(&total_unique.to_string());
     content.push('\n');
 
-    // Write all content at once
-    tokio::fs::write(&output_file, &content)
-        .await
-        .map_err(|e| {
-            eprintln!("Failed to write file: {e}");
-            e
-        })?;
+    // Write atomically: content is first written to a hidden temp file in the
+    // same directory as output_file, then moved into place with
+    // tokio::fs::rename() — an atomic rename on POSIX and Windows, same
+    // guarantee as Python's Path.replace() in the sibling project. This
+    // ensures readers of output_file (RouterOS polling it over HTTP, or a
+    // concurrent process) never observe a partially-written file, even if
+    // this process is interrupted mid-write. On failure, the temp file is
+    // removed and the error is returned; output_file is left untouched.
+    let tmp_file_name = format!(
+        ".{}.tmp",
+        output_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("hosts.txt")
+    );
+    let tmp_file = output_file.with_file_name(tmp_file_name);
+
+    if let Err(e) = tokio::fs::write(&tmp_file, &content).await {
+        eprintln!("Failed to write file: {e}");
+        let _ = tokio::fs::remove_file(&tmp_file).await;
+        return Err(e);
+    }
+
+    if let Err(e) = tokio::fs::rename(&tmp_file, &output_file).await {
+        eprintln!("Failed to move temp file into place: {e}");
+        let _ = tokio::fs::remove_file(&tmp_file).await;
+        return Err(e);
+    }
     println!(
         "Total unique domains across all sources: {}",
         format_with_commas(total_unique)
     );
     println!("Done! Written to: {}", output_file.display());
-    println!("Elapsed: {:.2?}", start_time.elapsed());
+    println!("Elapsed: {:.2}s", start_time.elapsed().as_secs_f64());
 
     Ok(())
 }
