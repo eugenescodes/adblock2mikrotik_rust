@@ -6,7 +6,7 @@
 # Homepage: https://github.com/eugenescodes/adblock2mikrotik_rust
 # License: https://github.com/eugenescodes/adblock2mikrotik_rust/blob/main/LICENSE
 #
-# Last modified: 2026-08-22 00:47:26 UTC
+# Last modified: 2026-08-22 06:26:23 UTC
 #
 # This filter is generated using the following Hagezi DNS blocklist sources:
 # - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt
