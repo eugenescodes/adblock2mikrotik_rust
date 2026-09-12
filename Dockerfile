@@ -32,12 +32,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Create a non-root user and a dedicated output directory owned by it —
+# mirrors the Python port's runtime image.
+RUN useradd --system --no-create-home appuser \
+    && mkdir -p /output \
+    && chown appuser:appuser /output
+
 # Where to write hosts.txt inside the container — same as /output
 ENV OUTPUT_DIR=/output
-RUN mkdir -p /output
 
-# Copy only the compiled binary and config file
+# Copy only the compiled binary
 COPY --from=builder /app/target/release/adblock2mikrotik_rust /app/adblock2mikrotik_rust
+
+# Run as the non-root user and expose the output dir as a volume
+USER appuser
+VOLUME /output
 
 # Run the binary
 CMD ["/app/adblock2mikrotik_rust"]

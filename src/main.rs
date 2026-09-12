@@ -1,5 +1,6 @@
 use adblock2mikrotik_rust::run;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::env;
 use std::io;
 use std::path::Path;
@@ -23,15 +24,27 @@ const CONFIG_PATH: &str = "config.toml";
 /// image.
 const DEFAULT_CONFIG_TOML: &str = include_str!("../config.toml.example");
 
-/// Default sources used as fallback if config.toml is not found, invalid,
-/// or has no [sources] table. Parsed from the bundled config.toml.example
-/// (see DEFAULT_CONFIG_TOML) rather than duplicated as a separate literal,
-/// so the two never drift apart.
+/// Collapse duplicate URLs while preserving first-seen order.
+///
+/// Mirrors the Python port's `list(dict.fromkeys(urls))`: run() keys fetched
+/// results by URL, so a repeated URL would otherwise be fetched twice and
+/// counted twice.
+fn dedup_preserving_order(urls: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    urls.into_iter()
+        .filter(|url| seen.insert(url.clone()))
+        .collect()
+}
+
+/// Default sources used as fallback when config.toml is not found. Parsed
+/// from the bundled config.toml.example (see DEFAULT_CONFIG_TOML) rather than
+/// duplicated as a separate literal, so the two never drift apart.
 fn default_sources() -> Vec<String> {
     toml::from_str::<Config>(DEFAULT_CONFIG_TOML)
         .ok()
         .and_then(|config| config.sources)
         .and_then(|sources| sources.urls)
+        .map(dedup_preserving_order)
         .unwrap_or_default()
 }
 
@@ -41,43 +54,53 @@ fn default_sources() -> Vec<String> {
 /// internally) so tests can point it at an isolated temp file instead of
 /// mutating a real config.toml in the project's working directory.
 ///
-/// Console output and fallback structure:
-/// config.toml missing, unreadable, invalid TOML, or with no [sources]
-/// urls key all fall back to the embedded config.toml.example defaults,
-/// with the same "Note: ... using default sources" / "Loaded N default
-/// sources" messaging. An explicit `urls = []` is treated as an intentional
-/// override (convert nothing), not a missing value, and is returned as-is.
+/// Semantics mirror the Python port's `load_config()`:
+/// - A *missing* config file falls back to the embedded config.toml.example
+///   defaults, logging a "not found" note.
+/// - A config file that *exists* but is unusable (malformed TOML, no
+///   `[sources] urls` list, wrong value types, or an empty list) is a
+///   configuration error: it logs an error and returns an empty list, so a
+///   typo in the user's own config is never silently replaced by the
+///   defaults.
+/// - If the bundled fallback is itself unusable, that is logged too and an
+///   empty list is returned.
+///
+/// An empty result is treated by main() as fatal (non-zero exit).
 fn load_config(config_path: &Path) -> Vec<String> {
-    let urls: Option<Vec<String>> = std::fs::read_to_string(config_path)
-        .ok()
-        .and_then(|content| toml::from_str::<Config>(&content).ok())
-        .and_then(|config| config.sources)
-        .and_then(|sources| sources.urls);
-
-    if let Some(urls) = urls {
-        println!(
-            "Loaded {} sources from {}",
-            urls.len(),
-            config_path.display()
-        );
-        return urls;
-    }
-
     if config_path.exists() {
+        let urls: Option<Vec<String>> = std::fs::read_to_string(config_path)
+            .ok()
+            .and_then(|content| toml::from_str::<Config>(&content).ok())
+            .and_then(|config| config.sources)
+            .and_then(|sources| sources.urls)
+            .map(dedup_preserving_order);
+
+        if let Some(urls) = urls
+            && !urls.is_empty()
+        {
+            println!(
+                "Loaded {} sources from {}",
+                urls.len(),
+                config_path.display()
+            );
+            return urls;
+        }
+
         println!(
-            "Note: {} has no usable [sources] urls, using default sources from config.toml.example",
+            "Error: {} has no usable [sources] urls — refusing to fall back to defaults.",
             config_path.display()
         );
-    } else {
-        println!(
-            "Note: {} not found, using default sources from config.toml.example",
-            config_path.display()
-        );
+        return Vec::new();
     }
+
+    println!(
+        "\nNote: {} not found, using default sources from config.toml.example",
+        config_path.display()
+    );
 
     let default_urls = default_sources();
     if default_urls.is_empty() {
-        eprintln!("Error: config.toml.example is missing or has no [sources] urls.");
+        println!("Error: default source file config.toml.example is missing or invalid.");
     } else {
         println!(
             "Loaded {} default sources from config.toml.example",
@@ -100,8 +123,18 @@ async fn main() -> io::Result<()> {
     }
 
     let urls = load_config(Path::new(CONFIG_PATH));
+    if urls.is_empty() {
+        // load_config has already reported why the source list is unusable;
+        // fail loudly instead of leaving a stale hosts.txt in place.
+        std::process::exit(1);
+    }
+
     let url_refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
-    run(url_refs).await
+    if run(url_refs).await.is_err() {
+        // run() has already printed the reason and written nothing.
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -146,7 +179,9 @@ mod tests {
         // SAFETY: same guard as above.
         unsafe { std::env::remove_var("OUTPUT_DIR") };
 
-        assert!(result.is_ok());
+        // An empty source list is fatal (non-zero exit), mirroring the Python
+        // port — but no partial or empty hosts.txt must be left behind.
+        assert!(result.is_err());
         assert!(
             fs::metadata(temp_dir.path().join("hosts.txt")).is_err(),
             "hosts.txt should not be created when no rules fetched"
@@ -180,17 +215,20 @@ urls = [
 
     #[test]
     fn test_load_config_fallback_on_invalid_toml() {
+        // A config.toml that *exists* but is malformed is a configuration
+        // error, not a reason to silently use the defaults.
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "this is not valid toml [[[").unwrap();
         let urls = load_config(&config_path);
-        assert_eq!(urls, default_sources());
+        assert!(urls.is_empty());
+        assert_ne!(urls, default_sources());
     }
 
     #[test]
-    fn test_load_config_empty_array() {
-        // Explicit `urls = []` is an intentional override — convert nothing —
-        // and must NOT fall back to defaults. Contrast with the next test.
+    fn test_load_config_empty_array_is_an_error() {
+        // Explicit `urls = []` leaves nothing to convert; it is unusable, not
+        // an intentional override that should be accepted silently.
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let toml_content = r#"
@@ -199,20 +237,32 @@ urls = []
 "#;
         fs::write(&config_path, toml_content).unwrap();
         let urls = load_config(&config_path);
-        assert_eq!(urls.len(), 0);
+        assert!(urls.is_empty());
+        assert_ne!(urls, default_sources());
     }
 
     #[test]
-    fn test_load_config_sources_present_without_urls_key_falls_back() {
-        // [sources] present but no `urls` key at all is a missing value, not
-        // an explicit override — must fall back to defaults, same as if
-        // config.toml didn't exist. Previously this silently returned an
-        // empty Vec instead of falling back, unlike the Python port.
+    fn test_load_config_sources_present_without_urls_key_is_an_error() {
+        // [sources] present but no `urls` key at all is unusable, not a
+        // missing-file fallback.
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "[sources]\n# no urls key here\n").unwrap();
         let urls = load_config(&config_path);
-        assert_eq!(urls, default_sources());
+        assert!(urls.is_empty());
+        assert_ne!(urls, default_sources());
+    }
+
+    #[test]
+    fn test_load_config_rejects_non_string_urls() {
+        // A structurally wrong list must be rejected instead of taken at face
+        // value (and then iterated character by character).
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(&config_path, "[sources]\nurls = [1, 2]\n").unwrap();
+        let urls = load_config(&config_path);
+        assert!(urls.is_empty());
+        assert_ne!(urls, default_sources());
     }
 
     #[test]
@@ -265,19 +315,28 @@ urls = [
     }
 
     #[test]
-    fn test_load_config_duplicate_urls() {
+    fn test_load_config_deduplicates_urls_preserving_order() {
+        // Duplicate source URLs collapse to a single entry, keeping the order
+        // of first appearance — mirrors the Python port and avoids fetching
+        // and counting the same list twice.
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let toml_content = r#"
 [sources]
 urls = [
     "https://example.com/list.txt",
-    "https://example.com/list.txt",
     "https://example.com/other.txt",
+    "https://example.com/list.txt",
 ]
 "#;
         fs::write(&config_path, toml_content).unwrap();
         let urls = load_config(&config_path);
-        assert_eq!(urls.len(), 3, "Should preserve duplicate URLs from config");
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.com/list.txt".to_string(),
+                "https://example.com/other.txt".to_string(),
+            ]
+        );
     }
 }

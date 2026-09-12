@@ -17,9 +17,14 @@ fn is_valid_label(label: &str) -> bool {
         && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// Validates a domain without regex — replaces DOMAIN_RE.
-/// Equivalent to: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$
+/// Validates a domain without regex — replaces DOMAIN_RE from the Python port.
+/// Equivalent to: ^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,24}$
 fn is_valid_domain(domain: &str) -> bool {
+    // Total length 1–253 chars (mirrors the regex's `(?=.{1,253}$)` lookahead).
+    if domain.is_empty() || domain.len() > 253 {
+        return false;
+    }
+
     // Single pass: validate all labels, track last one for TLD check
     let mut iter = domain.split('.');
     let mut prev: Option<&str> = None;
@@ -41,9 +46,9 @@ fn is_valid_domain(domain: &str) -> bool {
         return false;
     }
 
-    // Last label is TLD: only ASCII alpha, at least 2 chars
+    // Last label is TLD: only ASCII alpha, 2–24 chars (mirrors `[a-zA-Z]{2,24}`).
     match prev {
-        Some(tld) => tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()),
+        Some(tld) => (2..=24).contains(&tld.len()) && tld.chars().all(|c| c.is_ascii_alphabetic()),
         None => false,
     }
 }
@@ -65,6 +70,10 @@ fn is_valid_domain(domain: &str) -> bool {
 /// assert_eq!(convert_rule("# just a comment"), None);
 /// // Invalid domain
 /// assert_eq!(convert_rule("||invalid_domain^"), None);
+/// // Uppercase domains are normalized to lowercase
+/// assert_eq!(convert_rule("||Example.COM^"), Some("0.0.0.0 example.com".to_string()));
+/// // The '^' anchor is required
+/// assert_eq!(convert_rule("||example.com"), None);
 /// ```
 pub fn convert_rule(rule: &str) -> Option<String> {
     // Strip inline comment without allocation (replaces COMMENT_RE.replace())
@@ -80,10 +89,17 @@ pub fn convert_rule(rule: &str) -> Option<String> {
     // Must start with "||" — strip_prefix returns None otherwise
     let rest = rule.strip_prefix("||")?;
 
-    // Take domain: up to first '^', then up to first '$' (for option modifiers)
-    let domain = rest.split('^').next()?.split('$').next()?;
+    // The Python port requires a '^' anchor ("||example.com" is rejected), so
+    // do the same here instead of silently accepting rules without one.
+    if !rest.contains('^') {
+        return None;
+    }
 
-    if is_valid_domain(domain) {
+    // Domain is everything up to the first '^'. Normalize to lowercase, as the
+    // Python port's extract_domain() returns domain.lower().
+    let domain = rest.split('^').next()?.to_lowercase();
+
+    if is_valid_domain(&domain) {
         Some(format!("{ENTRY_PREFIX}{domain}"))
     } else {
         None
@@ -169,6 +185,14 @@ fn format_with_commas(n: usize) -> String {
 }
 
 pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
+    // An empty source list is fatal: there is nothing to convert, and exiting
+    // 0 would leave a stale hosts.txt in place. Mirrors the Python port's
+    // main(), which raises SystemExit(1) before fetching anything.
+    if urls.is_empty() {
+        eprintln!("Error: no sources configured (empty [sources] urls list).");
+        return Err(std::io::Error::other("no sources configured"));
+    }
+
     let start_time = std::time::Instant::now();
 
     // Create a single Client instance to reuse connections (Keep-Alive)
@@ -206,18 +230,24 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     }
     indexed_results.sort_unstable_by_key(|(i, _, _, _)| *i);
 
+    // A configured source that could not be fetched (error, or an empty
+    // response) means the artifact would be narrower than the config promises,
+    // so the whole run fails below instead of publishing a partial list.
+    // Mirrors the Python port's failed_sources handling.
+    let mut failed_sources: Vec<String> = Vec::new();
+
     for (_, url, result, fetch_elapsed) in indexed_results {
         // Short filename (last URL path segment) — matches Python's
-        // url.split('/')[-1], used in progress output so long URLs don't
-        // clutter the console.
+        // _source_name(), used in progress output so long URLs don't clutter
+        // the console.
         let short = url.split('/').next_back().unwrap_or(&url).to_string();
 
         match result {
-            Ok(rules) => {
+            Ok(rules) if !rules.is_empty() => {
                 println!(
-                    "Fetched {} lines from {} ({:.2}s)",
-                    format_with_commas(rules.len()),
+                    "  - {}: {} lines ({:.2}s)",
                     short,
+                    format_with_commas(rules.len()),
                     fetch_elapsed.as_secs_f64()
                 );
                 let mut converted: Vec<String> = Vec::new();
@@ -231,21 +261,43 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
                     }
                 }
                 println!(
-                    "Converted {} unique domains from {}\n",
-                    format_with_commas(converted.len()),
-                    short
+                    "  - {}: {} unique domains",
+                    short,
+                    format_with_commas(converted.len())
                 );
                 source_data.push((url, converted));
             }
+            Ok(_) => {
+                // fetch_rules returns no rules only when its retries left it
+                // with an empty body, and an upstream list is never
+                // legitimately empty.
+                eprintln!("  - {short}: ERROR: no rules fetched");
+                failed_sources.push(url);
+            }
             Err(e) => {
-                eprintln!("Failed to fetch rules from {url}: {e}");
+                eprintln!("  - {short}: ERROR: {e}");
+                failed_sources.push(url);
             }
         }
     }
 
+    if !failed_sources.is_empty() {
+        eprintln!(
+            "\nError: {} of {} source(s) failed to fetch ({}) — refusing to publish a partial list.",
+            failed_sources.len(),
+            urls.len(),
+            failed_sources.join(", ")
+        );
+        return Err(std::io::Error::other("one or more sources failed to fetch"));
+    }
+
     if seen_domains.is_empty() {
-        eprintln!("Warning: No valid rules were converted. Skipping writing to file.");
-        return Ok(());
+        // Every source answered, but none contained a supported ||domain^
+        // rule: fail instead of exiting 0 with a stale hosts.txt in place.
+        eprintln!(
+            "Error: no valid rules were converted from any source (sources empty or in an unsupported format)."
+        );
+        return Err(std::io::Error::other("no valid rules converted"));
     }
 
     let total_unique = seen_domains.len();
@@ -253,20 +305,28 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     // Build header with all stats and info at the top
     let current_time = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
 
-    // Prepare lines before header to list all source URLs and their unique domain counts
-    // Uses original urls list so failed sources still appear in the header
-    let url_lines: String = urls.iter().map(|url| format!("# - {url}\n")).collect();
+    let total_unique_display = format_with_commas(total_unique);
+
+    // List only successfully fetched sources — every source must succeed to
+    // reach this point, so this matches the configured order.
+    let url_lines: String = source_data
+        .iter()
+        .map(|(url, _)| format!("# - {url}\n"))
+        .collect();
 
     let source_lines: String = source_data
         .iter()
         .map(|(url, rules)| {
             let short = url.split('/').next_back().unwrap_or(url);
-            format!("# - {short} --> {:} unique domains\n", rules.len())
+            format!(
+                "# - {short} --> {} unique domains\n",
+                format_with_commas(rules.len())
+            )
         })
         .collect();
 
     let header = format!(
-        "# Title: Unified DNS blocklist optimized for RouterOS, compiled from Hagezi sources\n\
+        "# Title: Unified DNS blocklist optimized for RouterOS\n\
          #\n\
          # URL to add in RouterOS:\n\
          # https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt\n\
@@ -276,13 +336,11 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
          #\n\
          # Last modified: {current_time}\n\
          #\n\
-         # This filter is generated using the following Hagezi DNS blocklist sources:\n\
+         # This filter is generated from the following DNS blocklist sources:\n\
          {url_lines}\
          #\n\
-         # Total unique domains: {total_unique}\n\
+         # Total unique domains: {total_unique_display}\n\
          {source_lines}\
-         #\n\
-         # Format: 0.0.0.0 domain.tld\n\
          #\n"
     );
 
@@ -312,7 +370,7 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     }
 
     content.push_str("\n# Total unique domains: ");
-    content.push_str(&total_unique.to_string());
+    content.push_str(&total_unique_display);
     content.push('\n');
 
     // Write atomically: content is first written to a hidden temp file in the
@@ -474,5 +532,43 @@ mod tests {
     fn test_convert_rule_leading_trailing_hyphen() {
         assert_eq!(convert_rule("||-example.com^"), None);
         assert_eq!(convert_rule("||example-.com^"), None);
+    }
+
+    #[test]
+    fn test_convert_rule_lowercases_domain() {
+        // extract_domain() in the Python port returns domain.lower().
+        assert_eq!(
+            convert_rule("||Sub.DomAIN.ExAmPlE.cOm^"),
+            Some("0.0.0.0 sub.domain.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_rule_requires_caret() {
+        // The Python port only accepts rules containing the '^' anchor.
+        assert_eq!(convert_rule("||example.com"), None);
+        assert_eq!(convert_rule("||example.com$third-party"), None);
+    }
+
+    #[test]
+    fn test_convert_rule_rejects_overlong_label() {
+        let label = "a".repeat(64);
+        let rule = format!("||{label}.com^");
+        assert_eq!(convert_rule(&rule), None);
+    }
+
+    #[test]
+    fn test_convert_rule_rejects_overlong_tld() {
+        let tld = "a".repeat(25);
+        let rule = format!("||example.{tld}^");
+        assert_eq!(convert_rule(&rule), None);
+    }
+
+    #[test]
+    fn test_convert_rule_rejects_domain_longer_than_253() {
+        // Four 63-char labels + a TLD exceed the RFC 1035 253-char limit.
+        let label = "a".repeat(63);
+        let rule = format!("||{label}.{label}.{label}.{label}.com^");
+        assert_eq!(convert_rule(&rule), None);
     }
 }

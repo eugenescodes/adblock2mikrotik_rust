@@ -26,8 +26,11 @@ Optimized for memory-constrained low-resource devices like the [RB951Ui-2nD hAP]
 
 - Converts `||example.com^` rules to MikroTik DNS adlist format (`0.0.0.0 example.com`)
 - Deduplicates entries across all sources
-- Validates domains against RFC label rules (rejects double-dots, leading/trailing hyphens)
+- Validates domains against RFC rules (rejects double-dots, leading/trailing hyphens, over-long labels/TLDs)
+- Normalizes domains to lowercase
 - Pre-filters comments and empty lines for efficiency
+- Writes `hosts.txt` atomically — a failed or interrupted run never leaves a partial file in place
+- Exits non-zero, writing nothing, if any configured source can't be fetched or if the result would be empty — a narrow or stale list is never published
 - Compatible with RouterOS 7.15+
 
 ## Usage
@@ -60,21 +63,6 @@ cargo run --release -- --version
 docker build -t adblock2mikrotik_rust .
 ```
 
-> [!NOTE]
-> The `-v` flag mounts your current directory into the container at `/output`.
-> The script writes `hosts.txt` to `/output`, so the file appears directly
-> in your current directory on the host — no manual copying needed.
->
-> On Linux, the container runs as its own non-root user, which cannot write to
-> your bind-mounted directory unless the UIDs match. `--user $(id -u):$(id -g)`
-> makes the script run as *you*, so `hosts.txt` gets write access and is owned
-> by your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
->
-> On SELinux systems (Fedora, RHEL, CentOS), add the `:Z` suffix to the volume
-> so the bind mount is relabeled for the container: `-v "$(pwd)":/output:Z`.
-
-After running either option, `hosts.txt` is created in the current directory.
-
 ```bash
 # Linux / macOS
 docker run --rm --user $(id -u):$(id -g) -v "$(pwd)":/output adblock2mikrotik_rust
@@ -88,8 +76,15 @@ docker run --rm -v "${PWD}:/output" adblock2mikrotik_rust
 > The binary writes `hosts.txt` to `/output`, so the file appears directly
 > in your current directory on the host — no manual copying needed.
 >
-> On Linux, `--user $(id -u):$(id -g)` ensures the output file is owned by
-> your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
+> On Linux, the container runs as its own non-root user, which cannot write to
+> your bind-mounted directory unless the UIDs match. `--user $(id -u):$(id -g)`
+> makes the binary run as *you*, so `hosts.txt` gets write access and is owned
+> by your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
+>
+> On SELinux systems (Fedora, RHEL, CentOS), add the `:Z` suffix to the volume
+> so the bind mount is relabeled for the container: `-v "$(pwd)":/output:Z`.
+
+After running either option, `hosts.txt` is created in the current directory.
 
 ## MikroTik RouterOS Integration
 
@@ -122,7 +117,7 @@ See also the official MikroTik documentation:
 
 ## Configuration
 
-By default, the script uses three pre-configured Hagezi filter lists (see [Sources](#sources) above). These defaults live in `config.toml.example` — the same file you copy to customize your own sources — and are embedded into the binary at compile time (`include_str!`), so they work regardless of where the binary runs, with no extra file needed alongside it. You can override them by creating a `config.toml` file:
+By default, the script uses two pre-configured Hagezi filter lists (see [Sources](#sources) above). These defaults live in `config.toml.example` — the same file you copy to customize your own sources — and are embedded into the binary at compile time (`include_str!`), so they work regardless of where the binary runs, with no extra file needed alongside it. You can override them by creating a `config.toml` file:
 
 ### Customize sources
 
@@ -139,7 +134,6 @@ cp config.toml.example config.toml
 urls = [
     "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.mini.txt",
     "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt",
-    "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/gambling.mini.txt",
 ]
 ```
 
@@ -149,7 +143,7 @@ urls = [
 cargo run --release
 ```
 
-The script will automatically load sources from `config.toml`. If the file doesn't exist, it falls back to the default sources above.
+The script loads sources from `config.toml` in the current working directory. If that file does not exist, it falls back to the built-in defaults (the embedded `config.toml.example`). If `config.toml` exists but has no usable `[sources] urls` — malformed TOML, a value that isn't a list of URL strings, or an empty list — the script reports an error and exits with a non-zero status without writing `hosts.txt`: a typo in your own config is never silently replaced by the defaults.
 
 #### Using a custom `config.toml` with Docker
 

@@ -69,14 +69,17 @@ async fn test_fetch_rules_http_error() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn test_run_with_partial_failure() {
-    // start_paused = true: same technique as test_fetch_rules_http_error —
-    // tokio's mock time auto-advances once every task is blocked on a
-    // timer, so the retry backoff (2s + 4s) against server2 runs in
-    // microseconds instead of ~6s of real wall-clock time. Confirmed this
-    // still works correctly when a second, real-I/O task (server1's fetch)
-    // runs concurrently in the same JoinSet inside run() — the sleeping
-    // task's virtual time still advances once the I/O task completes.
+async fn test_run_with_partial_failure_fails_the_run() {
+    // A configured source that fails must fail the entire run (no partial
+    // hosts.txt published), mirroring the Python port's failed_sources
+    // handling. start_paused = true: same technique as
+    // test_fetch_rules_http_error — tokio's mock time auto-advances once
+    // every task is blocked on a timer, so the retry backoff (2s + 4s)
+    // against server2 runs in microseconds instead of ~6s of real wall-clock
+    // time. Confirmed this still works correctly when a second, real-I/O task
+    // (server1's fetch) runs concurrently in the same JoinSet inside run() —
+    // the sleeping task's virtual time still advances once the I/O task
+    // completes.
     let _guard = output_dir_lock().lock().await;
 
     let mut server1 = mockito::Server::new_async().await;
@@ -105,10 +108,10 @@ async fn test_run_with_partial_failure() {
     let urls_ref: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
 
     let result = run(urls_ref).await;
-    assert!(result.is_ok());
-
-    // Clean up hosts.txt written to CWD
-    let _ = std::fs::remove_file("hosts.txt");
+    assert!(
+        result.is_err(),
+        "a source that fails to fetch must fail the whole run"
+    );
 }
 
 #[tokio::test]
