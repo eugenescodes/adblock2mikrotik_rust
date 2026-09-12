@@ -48,5 +48,5 @@ COPY --from=builder /app/target/release/adblock2mikrotik_rust /app/adblock2mikro
 USER appuser
 VOLUME /output
 
-# Run the binary
-CMD ["/app/adblock2mikrotik_rust"]
+# Run the binary as the entrypoint
+ENTRYPOINT ["/app/adblock2mikrotik_rust"]
