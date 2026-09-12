@@ -166,9 +166,14 @@ pub async fn fetch_rules(client: &reqwest::Client, url: &str) -> Result<Vec<Stri
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
+    let error = last_error.unwrap_or_else(|| {
         anyhow::anyhow!("Error fetching {} after {} attempts", url, max_attempts)
-    }))
+    });
+    // Match the Python port's fetch_rules(): report the final failure to the
+    // console (stdout) and let run() report the per-source "no rules fetched"
+    // line, instead of surfacing a raw error.
+    println!("Error fetching {url} after {max_attempts} attempts: {error}");
+    Err(error)
 }
 
 // Helper function to format numbers with commas (e.g., 76376 -> "76,376")
@@ -189,7 +194,7 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     // 0 would leave a stale hosts.txt in place. Mirrors the Python port's
     // main(), which raises SystemExit(1) before fetching anything.
     if urls.is_empty() {
-        eprintln!("Error: no sources configured (empty [sources] urls list).");
+        println!("Error: no sources configured (empty [sources] urls list).");
         return Err(std::io::Error::other("no sources configured"));
     }
 
@@ -206,10 +211,11 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     let mut seen_domains: HashSet<String> = HashSet::with_capacity(300_000);
     let mut source_data: Vec<(String, Vec<String>)> = Vec::new();
 
-    println!("Starting conversion of {} source(s)...\n", urls.len());
+    println!("\nFetching {} source(s)...", urls.len());
 
-    // Fetch all sources in parallel using tokio::task::JoinSet (no extra crate needed)
-    // Preserving original URL order via indexed results
+    // Fetch all sources in parallel using tokio::task::JoinSet (no extra crate
+    // needed). Results are reported as each source completes, mirroring the
+    // Python port's ThreadPoolExecutor + as_completed() progress output.
     let mut join_set = tokio::task::JoinSet::new();
     for (i, url) in urls.iter().enumerate() {
         let url = url.to_string();
@@ -222,27 +228,21 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         });
     }
 
-    // Collect results indexed by original position, then sort to restore URL order
-    let mut indexed_results = Vec::with_capacity(urls.len());
-    while let Some(res) = join_set.join_next().await {
-        let task_result = res.expect("task panicked");
-        indexed_results.push(task_result);
-    }
-    indexed_results.sort_unstable_by_key(|(i, _, _, _)| *i);
-
     // A configured source that could not be fetched (error, or an empty
     // response) means the artifact would be narrower than the config promises,
     // so the whole run fails below instead of publishing a partial list.
     // Mirrors the Python port's failed_sources handling.
     let mut failed_sources: Vec<String> = Vec::new();
+    let mut indexed_results = Vec::with_capacity(urls.len());
 
-    for (_, url, result, fetch_elapsed) in indexed_results {
+    while let Some(res) = join_set.join_next().await {
+        let (i, url, result, fetch_elapsed) = res.expect("task panicked");
         // Short filename (last URL path segment) — matches Python's
         // _source_name(), used in progress output so long URLs don't clutter
         // the console.
         let short = url.split('/').next_back().unwrap_or(&url).to_string();
 
-        match result {
+        match &result {
             Ok(rules) if !rules.is_empty() => {
                 println!(
                     "  - {}: {} lines ({:.2}s)",
@@ -250,39 +250,21 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
                     format_with_commas(rules.len()),
                     fetch_elapsed.as_secs_f64()
                 );
-                let mut converted: Vec<String> = Vec::new();
-                for rule in rules.iter() {
-                    if let Some(entry) = convert_rule(rule) {
-                        // Extract domain part by stripping the fixed prefix
-                        let domain = entry[ENTRY_PREFIX.len()..].to_string();
-                        if seen_domains.insert(domain) {
-                            converted.push(entry);
-                        }
-                    }
-                }
-                println!(
-                    "  - {}: {} unique domains",
-                    short,
-                    format_with_commas(converted.len())
-                );
-                source_data.push((url, converted));
             }
-            Ok(_) => {
+            _ => {
                 // fetch_rules returns no rules only when its retries left it
                 // with an empty body, and an upstream list is never
                 // legitimately empty.
-                eprintln!("  - {short}: ERROR: no rules fetched");
-                failed_sources.push(url);
-            }
-            Err(e) => {
-                eprintln!("  - {short}: ERROR: {e}");
-                failed_sources.push(url);
+                println!("  - {short}: ERROR: no rules fetched");
+                failed_sources.push(url.clone());
             }
         }
+
+        indexed_results.push((i, url, result));
     }
 
     if !failed_sources.is_empty() {
-        eprintln!(
+        println!(
             "\nError: {} of {} source(s) failed to fetch ({}) — refusing to publish a partial list.",
             failed_sources.len(),
             urls.len(),
@@ -291,10 +273,40 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         return Err(std::io::Error::other("one or more sources failed to fetch"));
     }
 
+    // Stage 2: convert and deduplicate strictly in configured order, exactly
+    // like the Python port's sequential conversion pass.
+    println!("\nConverting and deduplicating...");
+
+    indexed_results.sort_unstable_by_key(|(i, _, _)| *i);
+
+    for (_, url, result) in indexed_results {
+        let short = url.split('/').next_back().unwrap_or(&url).to_string();
+        // Any Err/empty case was turned into a failed source and returned
+        // above, so this is always a successful, non-empty rule list.
+        let rules = result.unwrap_or_default();
+
+        let mut converted: Vec<String> = Vec::new();
+        for rule in rules.iter() {
+            if let Some(entry) = convert_rule(rule) {
+                // Extract domain part by stripping the fixed prefix
+                let domain = entry[ENTRY_PREFIX.len()..].to_string();
+                if seen_domains.insert(domain) {
+                    converted.push(entry);
+                }
+            }
+        }
+        println!(
+            "  - {}: {} unique domains",
+            short,
+            format_with_commas(converted.len())
+        );
+        source_data.push((url, converted));
+    }
+
     if seen_domains.is_empty() {
         // Every source answered, but none contained a supported ||domain^
         // rule: fail instead of exiting 0 with a stale hosts.txt in place.
-        eprintln!(
+        println!(
             "Error: no valid rules were converted from any source (sources empty or in an unsupported format)."
         );
         return Err(std::io::Error::other("no valid rules converted"));
@@ -373,6 +385,9 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
     content.push_str(&total_unique_display);
     content.push('\n');
 
+    // Printed before the write, matching the Python port's ordering.
+    println!("\nTotal unique domains across all sources: {total_unique_display}");
+
     // Write atomically: content is first written to a hidden temp file in the
     // same directory as output_file, then moved into place with
     // tokio::fs::rename() — an atomic rename on POSIX and Windows, same
@@ -401,12 +416,8 @@ pub async fn run(urls: Vec<&str>) -> std::io::Result<()> {
         let _ = tokio::fs::remove_file(&tmp_file).await;
         return Err(e);
     }
-    println!(
-        "Total unique domains across all sources: {}",
-        format_with_commas(total_unique)
-    );
     println!("Done! Written to: {}", output_file.display());
-    println!("Elapsed: {:.2}s", start_time.elapsed().as_secs_f64());
+    println!("Elapsed: {:.2}s\n", start_time.elapsed().as_secs_f64());
 
     Ok(())
 }
