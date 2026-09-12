@@ -60,12 +60,20 @@ cargo run --release -- --version
 docker build -t adblock2mikrotik_rust .
 ```
 
-> [!IMPORTANT]
-> If `hosts.txt` does not exist in your current directory, Docker might create it as a directory. Create the file first:
+> [!NOTE]
+> The `-v` flag mounts your current directory into the container at `/output`.
+> The script writes `hosts.txt` to `/output`, so the file appears directly
+> in your current directory on the host — no manual copying needed.
 >
-> ```bash
-> touch hosts.txt
-> ```
+> On Linux, the container runs as its own non-root user, which cannot write to
+> your bind-mounted directory unless the UIDs match. `--user $(id -u):$(id -g)`
+> makes the script run as *you*, so `hosts.txt` gets write access and is owned
+> by your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
+>
+> On SELinux systems (Fedora, RHEL, CentOS), add the `:Z` suffix to the volume
+> so the bind mount is relabeled for the container: `-v "$(pwd)":/output:Z`.
+
+After running either option, `hosts.txt` is created in the current directory.
 
 ```bash
 # Linux / macOS
