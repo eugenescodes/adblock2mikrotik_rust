@@ -17,31 +17,6 @@ Thumbs.db
 *.db
 
 # -----------------------
-# Python
-# -----------------------
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
-.venv/
-venv/
-
-# Tooling caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.tox/
-.coverage
-htmlcov/
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# -----------------------
 # Rust
 # -----------------------
 # Build artifacts
