@@ -1,9 +1,8 @@
-use adblock2mikrotik_rust::run;
+use adblock2mikrotik_rust::{resolve_output_file, run_with_options, set_quiet};
+use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::env;
-use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
 struct Config {
@@ -66,7 +65,17 @@ fn default_sources() -> Vec<String> {
 ///   empty list is returned.
 ///
 /// An empty result is treated by main() as fatal (non-zero exit).
-fn load_config(config_path: &Path) -> Vec<String> {
+///
+/// `required` mirrors the Python port's `load_config(..., required=True)`:
+/// when the caller named the file explicitly (`--config`), a missing file is an
+/// error rather than a reason to fall back to the defaults — otherwise the run
+/// would silently publish sources the user did not ask for.
+fn load_config(config_path: &Path, required: bool) -> Vec<String> {
+    if !config_path.exists() && required {
+        eprintln!("Error: config file {} not found.", config_path.display());
+        return Vec::new();
+    }
+
     if config_path.exists() {
         let urls: Option<Vec<String>> = std::fs::read_to_string(config_path)
             .ok()
@@ -86,7 +95,7 @@ fn load_config(config_path: &Path) -> Vec<String> {
             return urls;
         }
 
-        println!(
+        eprintln!(
             "Error: {} has no usable [sources] urls — refusing to fall back to defaults.",
             config_path.display()
         );
@@ -100,7 +109,7 @@ fn load_config(config_path: &Path) -> Vec<String> {
 
     let default_urls = default_sources();
     if default_urls.is_empty() {
-        println!("Error: default source file config.toml.example is missing or invalid.");
+        eprintln!("Error: default source file config.toml.example is missing or invalid.");
     } else {
         println!(
             "Loaded {} default sources from config.toml.example",
@@ -110,36 +119,81 @@ fn load_config(config_path: &Path) -> Vec<String> {
     default_urls
 }
 
-#[tokio::main]
-async fn main() -> io::Result<()> {
-    // Check for version flag before loading config to avoid unnecessary file I/O
-    let args: Vec<String> = env::args().collect();
-    if args
-        .iter()
-        .any(|arg| arg == "--version" || arg == "-v" || arg == "-V")
-    {
-        println!("adblock2mikrotik_rust v{}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
+/// Command-line interface, mirroring the Python port's `argparse` parser.
+#[derive(Parser, Debug)]
+#[command(
+    name = "adblock2mikrotik_rust",
+    version,
+    about = "Convert AdBlock-style filter lists (||domain^) into a hosts file \
+             for the MikroTik RouterOS DNS adlist.",
+    after_help = "Without --config, sources are read from ./config.toml if it exists, \
+                  otherwise the bundled default sources are used. Without --output, \
+                  hosts.txt is written to $OUTPUT_DIR if set, otherwise to the \
+                  current directory."
+)]
+struct Cli {
+    /// TOML file with the [sources] urls list (must exist)
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
 
-    let urls = load_config(Path::new(CONFIG_PATH));
+    /// Where to write the hosts file
+    #[arg(short, long, value_name = "FILE")]
+    output: Option<PathBuf>,
+
+    /// Fetch, validate and deduplicate as usual, but don't write the hosts file
+    #[arg(short = 'n', long)]
+    dry_run: bool,
+
+    /// Only print warnings and errors
+    #[arg(short, long)]
+    quiet: bool,
+}
+
+/// Run the CLI and return the process exit code.
+///
+/// Returns the code instead of calling `exit()` directly, so the binary's
+/// `main()` stays a one-liner and the exit-code contract is explicit.
+///
+/// Exit codes mirror the Python port: `0` on success, `1` for an unusable
+/// configuration or a source that could not be fetched (nothing is written in
+/// either case), and clap's own `2` for invalid command-line arguments.
+async fn run_cli() -> i32 {
+    let cli = Cli::parse();
+    set_quiet(cli.quiet);
+
+    // A named --config must exist; the implicit ./config.toml may be absent,
+    // which is what selects the bundled defaults.
+    let (config_path, required) = match &cli.config {
+        Some(path) => (path.as_path(), true),
+        None => (Path::new(CONFIG_PATH), false),
+    };
+
+    let urls = load_config(config_path, required);
     if urls.is_empty() {
         // load_config has already reported why the source list is unusable;
         // fail loudly instead of leaving a stale hosts.txt in place.
-        std::process::exit(1);
+        return 1;
     }
 
-    let url_refs: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
-    if run(url_refs).await.is_err() {
-        // run() has already printed the reason and written nothing.
-        std::process::exit(1);
+    let output_file = resolve_output_file(cli.output.as_deref());
+    let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+
+    // run_with_options has already printed the reason and written nothing.
+    match run_with_options(&url_refs, output_file, cli.dry_run).await {
+        Ok(()) => 0,
+        Err(_) => 1,
     }
-    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
+    std::process::ExitCode::from(run_cli().await as u8)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adblock2mikrotik_rust::run;
     use std::fs;
     use std::sync::OnceLock;
     use tempfile::tempdir;
@@ -191,7 +245,7 @@ mod tests {
     #[test]
     fn test_load_config_fallback_when_no_config() {
         let dir = tempdir().unwrap();
-        let urls = load_config(&dir.path().join("nonexistent_config.toml"));
+        let urls = load_config(&dir.path().join("nonexistent_config.toml"), false);
         assert_eq!(urls, default_sources());
     }
 
@@ -207,7 +261,7 @@ urls = [
 ]
 "#;
         fs::write(&config_path, toml_content).unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert_eq!(urls.len(), 2);
         assert_eq!(urls[0], "https://example.com/list1.txt");
         assert_eq!(urls[1], "https://example.com/list2.txt");
@@ -220,7 +274,7 @@ urls = [
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "this is not valid toml [[[").unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert!(urls.is_empty());
         assert_ne!(urls, default_sources());
     }
@@ -236,7 +290,7 @@ urls = [
 urls = []
 "#;
         fs::write(&config_path, toml_content).unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert!(urls.is_empty());
         assert_ne!(urls, default_sources());
     }
@@ -248,7 +302,7 @@ urls = []
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "[sources]\n# no urls key here\n").unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert!(urls.is_empty());
         assert_ne!(urls, default_sources());
     }
@@ -260,7 +314,7 @@ urls = []
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         fs::write(&config_path, "[sources]\nurls = [1, 2]\n").unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert!(urls.is_empty());
         assert_ne!(urls, default_sources());
     }
@@ -274,7 +328,7 @@ urls = []
 urls = ["https://custom.com/blocklist.txt"]
 "#;
         fs::write(&config_path, toml_content).unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert_ne!(
             urls,
             default_sources(),
@@ -309,7 +363,7 @@ urls = [
 ]
 "#;
         fs::write(&config_path, toml_content).unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert_eq!(urls.len(), 2);
         assert_eq!(urls[0], "https://example.com/list1.txt");
     }
@@ -330,7 +384,7 @@ urls = [
 ]
 "#;
         fs::write(&config_path, toml_content).unwrap();
-        let urls = load_config(&config_path);
+        let urls = load_config(&config_path, false);
         assert_eq!(
             urls,
             vec![

@@ -11,8 +11,11 @@ Convert ad-blocking filter lists to MikroTik RouterOS DNS adlist format.
 
 ## Overview
 
-Transforms popular ad-blocking filter lists (Hagezi) into a compact format compatible with the MikroTik RouterOS 7.15+ DNS adlist feature.
-Optimized for memory-constrained low-resource devices like the [RB951Ui-2nD hAP](https://mikrotik.com/product/RB951Ui-2nD) (which has 16 MB storage).
+Transforms popular ad-blocking filter lists (Hagezi) into a compact format
+compatible with the MikroTik RouterOS 7.15+ DNS adlist feature. Optimized for
+memory-constrained low-resource devices like the
+[RB951Ui-2nD hAP](https://mikrotik.com/product/RB951Ui-2nD) (which has 16 MB
+storage).
 
 ### Sources
 
@@ -24,13 +27,25 @@ Optimized for memory-constrained low-resource devices like the [RB951Ui-2nD hAP]
 
 ## Features
 
-- Converts `||example.com^` rules to MikroTik DNS adlist format (`0.0.0.0 example.com`)
-- Deduplicates entries across all sources
-- Validates domains against RFC rules (rejects double-dots, leading/trailing hyphens, over-long labels/TLDs)
+- Converts `||example.com^` rules to MikroTik DNS adlist format
+  (`0.0.0.0 example.com`)
+- Deduplicates entries across all sources, in the order the sources are
+  configured
+- Validates domains against RFC rules (rejects double-dots,
+  leading/trailing hyphens, over-long labels/TLDs)
 - Normalizes domains to lowercase
 - Pre-filters comments and empty lines for efficiency
-- Writes `hosts.txt` atomically — a failed or interrupted run never leaves a partial file in place
-- Exits non-zero, writing nothing, if any configured source can't be fetched or if the result would be empty — a narrow or stale list is never published
+- Fetches sources in parallel, capped at 3 concurrent requests, with 3
+  retries and exponential backoff
+- Bounded timeouts per source (3s connect, 10s read), so a stalled list
+  can't hang the run
+- Writes `hosts.txt` atomically — a failed or interrupted run never leaves
+  a partial file in place
+- Exits non-zero, writing nothing, if any configured source can't be
+  fetched or if the result would be empty — a narrow or stale list is
+  never published
+- Command-line interface with `--config`, `--output`, `--dry-run` and
+  `--quiet`
 - Compatible with RouterOS 7.15+
 
 ## Usage
@@ -49,12 +64,42 @@ cargo run --release
 
 After running, `hosts.txt` is created in the current directory.
 
-### Check the version
+### Command-line options
+
+```text
+adblock2mikrotik_rust [-h] [-V] [-c FILE] [-o FILE] [-n] [-q]
+```
+
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Show help and exit |
+| `-V`, `--version` | Show the version and exit |
+| `-c FILE`, `--config FILE` | Read sources from this TOML file. The file must exist — unlike `./config.toml`, a missing `--config` file is an error, not a reason to use the defaults |
+| `-o FILE`, `--output FILE` | Write the hosts file here (the directory must exist) |
+| `-n`, `--dry-run` | Do everything — fetch, validate, deduplicate, report the counts — but don't write the hosts file. The exit status is the same as for a real run |
+| `-q`, `--quiet` | Only print warnings and errors |
+
+Defaults without options: sources from `./config.toml` if it exists, otherwise the
+[bundled default sources](#configuration); output to `$OUTPUT_DIR/hosts.txt` if
+`OUTPUT_DIR` is set (as in the Docker image), otherwise `./hosts.txt`.
+Command-line options take precedence over both.
+
+Examples:
 
 ```bash
-cargo run --release -- --version
-# or, once built:
-./target/release/adblock2mikrotik_rust --version   # also accepts -v / -V
+cargo run --release -- --config my-lists.toml --output /tmp/blocklist.txt cargo
+run --release -- --dry-run -c new.toml # check a new config: are all sources
+reachable, how many domains? cargo run --release -- -q # quiet, e.g. for cron
+docker run --rm adblock2mikrotik_rust --help # options work with Docker too
+```
+
+The exit status is `0` on success, `1` if the configuration is unusable or any
+source could not be fetched (nothing is written in that case), and `2` for invalid
+command-line arguments. This makes it easy to use in scripts, for example to
+switch to a new config only if it works:
+
+```bash
+cargo run --release -- --dry-run -c new.toml && mv new.toml config.toml
 ```
 
 ### Option 2 — Docker
@@ -79,7 +124,8 @@ docker run --rm -v "${PWD}:/output" adblock2mikrotik_rust
 > On Linux, the container runs as its own non-root user, which cannot write to
 > your bind-mounted directory unless the UIDs match. `--user $(id -u):$(id -g)`
 > makes the binary run as *you*, so `hosts.txt` gets write access and is owned
-> by your current user. Not required on macOS or Windows (Docker Desktop handles this automatically).
+> by your current user. Not required on macOS or Windows (Docker Desktop handles
+> this automatically).
 >
 > On SELinux systems (Fedora, RHEL, CentOS), add the `:Z` suffix to the volume
 > so the bind mount is relabeled for the container: `-v "$(pwd)":/output:Z`.
@@ -91,17 +137,22 @@ After running either option, `hosts.txt` is created in the current directory.
 ### Add adlist via URL
 
 ```routeros
-/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=no
+/ip/dns/adlist add
+url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt
+ssl-verify=no
 ```
 
 ### Optional: enable SSL verification
 
-If you want to use `ssl-verify=yes`, you can download and import [CA certificates](https://curl.se/docs/caextract.html) using the following commands:
+If you want to use `ssl-verify=yes`, you can download and import
+[CA certificates](https://curl.se/docs/caextract.html) using the following
+commands:
 
 ```routeros
-/tool fetch url=https://curl.se/ca/cacert.pem
-/certificate import file-name=cacert.pem passphrase=""
-/ip/dns/adlist add url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt ssl-verify=yes
+/tool fetch url=https://curl.se/ca/cacert.pem /certificate import
+file-name=cacert.pem passphrase="" /ip/dns/adlist add
+url=https://raw.githubusercontent.com/eugenescodes/adblock2mikrotik_rust/refs/heads/main/hosts.txt
+ssl-verify=yes
 ```
 
 ### Add adlist from local file
@@ -117,7 +168,12 @@ See also the official MikroTik documentation:
 
 ## Configuration
 
-By default, the script uses two pre-configured Hagezi filter lists (see [Sources](#sources) above). These defaults live in `config.toml.example` — the same file you copy to customize your own sources — and are embedded into the binary at compile time (`include_str!`), so they work regardless of where the binary runs, with no extra file needed alongside it. You can override them by creating a `config.toml` file:
+By default, the script uses two pre-configured Hagezi filter lists (see
+[Sources](#sources) above). These defaults live in `config.toml.example` — the
+same file you copy to customize your own sources — and are embedded into the
+binary at compile time (`include_str!`), so they work regardless of where the
+binary runs, with no extra file needed alongside it. You can override them by
+creating a `config.toml` file:
 
 ### Customize sources
 
@@ -143,11 +199,20 @@ urls = [
 cargo run --release
 ```
 
-The script loads sources from `config.toml` in the current working directory. If that file does not exist, it falls back to the built-in defaults (the embedded `config.toml.example`). If `config.toml` exists but has no usable `[sources] urls` — malformed TOML, a value that isn't a list of URL strings, or an empty list — the script reports an error and exits with a non-zero status without writing `hosts.txt`: a typo in your own config is never silently replaced by the defaults.
+The script loads sources from `config.toml` in the current working directory. If
+that file does not exist, it falls back to the built-in defaults (the embedded
+`config.toml.example`). If `config.toml` exists but has no usable
+`[sources] urls` — malformed TOML, a value that isn't a list of URL strings, or
+an empty list — the script reports an error and exits with a non-zero status
+without writing `hosts.txt`: a typo in your own config is never silently
+replaced by the defaults.
 
 #### Using a custom `config.toml` with Docker
 
-The image only bundles the compiled binary — `config.toml.example` isn't copied in, and neither is your own `config.toml`. The binary looks for `config.toml` in its working directory, which is `/app` inside the container (see `WORKDIR /app` in the Dockerfile). Mount your file there:
+The image only bundles the compiled binary — `config.toml.example` isn't copied
+in, and neither is your own `config.toml`. The binary looks for `config.toml` in
+its working directory, which is `/app` inside the container (see `WORKDIR /app`
+in the Dockerfile). Mount your file there:
 
 ```bash
 docker run --rm --user $(id -u):$(id -g) \
@@ -164,7 +229,9 @@ For more Hagezi lists, visit the [Hagezi DNS blocklists repository](https://gith
 
 ## Development
 
-This project uses [Cargo](https://doc.rust-lang.org/cargo/) for dependency management and [Clippy](https://github.com/rust-lang/rust-clippy) + [rustfmt](https://github.com/rust-lang/rustfmt) for linting/formatting.
+This project uses [Cargo](https://doc.rust-lang.org/cargo/) for dependency
+management and [Clippy](https://github.com/rust-lang/rust-clippy) +
+[rustfmt](https://github.com/rust-lang/rustfmt) for linting/formatting.
 
 ### Prerequisites
 

@@ -1,8 +1,12 @@
 name: Pipeline
 
+# Default to read-only. Jobs that genuinely need to push (lint-and-test
+# auto-fixes formatting, update-hosts commits hosts.txt) opt in explicitly with
+# their own `permissions:` block. Keeping the default minimal means a job that
+# is added later — or a dependency action that turns malicious — cannot write to
+# the repository unless it was granted that power on purpose.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 on:
   push:
@@ -25,6 +29,11 @@ jobs:
   lint-and-test:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    # This job auto-commits formatting fixes on push, so it needs write access.
+    # It never pushes on pull_request (the commit step is gated on `push`), so a
+    # PR from a fork cannot make this job write to the repo.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -36,30 +45,22 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
       - name: Cache cargo registry
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # The toolchain is part of the cache key: a new pinned version must not
+          # reuse artifacts compiled by the previous one.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
 
       - name: Lint and fix Markdown
-        uses: DavidAnson/markdownlint-cli2-action@v24.2.0
+        uses: rvben/rumdl@v0.2.78
         with:
-          fix: true
-          globs: '**/*.md'
-        continue-on-error: true
+          path: '**/*.md'
+          command: fmt
 
       - name: Run cargo fmt
         run: cargo fmt --all
@@ -72,7 +73,7 @@ jobs:
           BRANCH_NAME="${{ github.head_ref || github.ref_name }}"
           if [ -n "$(git status --porcelain)" ]; then
             git add .
-            git commit -m "Auto-fix formatting (Markdown & cargo fmt)"
+            git commit -m "Auto-fix formatting (cargo fmt)"
             git pull --rebase --no-edit origin "$BRANCH_NAME"
             git push origin "HEAD:refs/heads/$BRANCH_NAME"
           else
@@ -80,13 +81,13 @@ jobs:
           fi
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --locked --verbose
 
       - name: Run doc tests
-        run: cargo test --doc
+        run: cargo test --locked --doc
 
   # ─────────────────────────────────────────────
   # JOB 2: DOCKER BUILD CHECK — push to main + dispatch only
@@ -122,6 +123,9 @@ jobs:
   update-hosts:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # This job commits the regenerated hosts.txt back to main.
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -133,25 +137,20 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo registry
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-cron-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-cron-
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
 
       - name: Run conversion
-      # remove --release for faster execution since this runs frequently
-        run: cargo run
+        # --release: the job compiles from a restored cache either way, and the
+        # release build uses less CPU on the conversion itself,
+        # so debug only makes this run slower, not cheaper.
+        run: cargo run --locked --release
 
       - name: Commit and push hosts.txt
         run: |

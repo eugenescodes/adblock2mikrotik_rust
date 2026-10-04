@@ -15,12 +15,12 @@ RUN mkdir -p src \
 # 2. Build the real binary, reusing the cached dependency artifacts above.
 #    --locked ensures the exact versions in Cargo.lock are used, never
 #    silently re-resolved during the image build.
+#    strip runs in the same layer as the build, the runtime stage copies the stripped file anyway, and
+#    a separate RUN would only add another layer to cache and invalidate.
 COPY src ./src
 COPY config.toml.example ./
-RUN cargo build --release --locked
-
-# Strip symbols and stage the binary for the runtime stage.
-RUN strip target/release/adblock2mikrotik_rust
+RUN cargo build --release --locked \
+  && strip target/release/adblock2mikrotik_rust
 
 # ---------- Runtime stage ----------
 FROM debian:stable-slim
