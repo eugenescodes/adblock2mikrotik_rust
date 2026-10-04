@@ -12,11 +12,17 @@ updates:
     directory: /
     schedule:
       interval: daily
+  
+  # Configuration for Rust dependencies managed by rust-toolchain
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: daily
 
   # Configuration for Docker dependencies
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
       # Disable all pull requests for Docker dependencies
     open-pull-requests-limit: 1
