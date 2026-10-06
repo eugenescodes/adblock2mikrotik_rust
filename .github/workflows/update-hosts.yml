@@ -1,0 +1,85 @@
+name: Update hosts
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: '0 */1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-hosts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-hosts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+
+      - name: Generate hosts.txt
+        run: cargo run --locked --release
+
+      - name: Compare with published list
+        id: compare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          published_file="$RUNNER_TEMP/published-hosts.txt"
+          published_url="https://eugenescodes.github.io/adblock2mikrotik_rust/hosts.txt?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          status="$(curl --silent --show-error --location \
+            --retry 3 \
+            --output "$published_file" \
+            --write-out '%{http_code}' \
+            "$published_url")"
+
+          if [[ "$status" == "404" ]]; then
+            echo "Published list not found; this will be the initial deployment."
+            changed=true
+          elif [[ "$status" != "200" ]]; then
+            echo "Unexpected HTTP status while checking published list: $status" >&2
+            exit 1
+          else
+            set +e
+            diff -u \
+              <(sed '/^# Last modified:/d' hosts.txt) \
+              <(sed '/^# Last modified:/d' "$published_file") \
+              > "$RUNNER_TEMP/hosts.diff"
+            diff_status=$?
+            set -e
+
+            case "$diff_status" in
+              0) changed=false ;;
+              1) changed=true ;;
+              *)
+                cat "$RUNNER_TEMP/hosts.diff" >&2
+                echo "Failed to compare generated and published hosts lists." >&2
+                exit "$diff_status"
+                ;;
+            esac
+          fi
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "$changed" > publish-changed.txt
+
+      - name: Upload generated list for Pages workflow
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosts-publish-${{ github.run_id }}
+          path: |
+            hosts.txt
+            publish-changed.txt
+          if-no-files-found: error
+          retention-days: 1

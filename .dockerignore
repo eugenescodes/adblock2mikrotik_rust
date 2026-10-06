@@ -1,0 +1,36 @@
+# Git and Docker configuration
+.git/
+.github/
+.gitignore
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# OS & Editor configurations
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.*
+
+# -----------------------
+# Rust
+# -----------------------
+# Avoid copying local build targets, let Docker compile it
+target/
+
+# Cargo backup files
+**/*.rs.bk
+
+# Note: Cargo.lock should be committed for binary projects, 
+# but ignored for library projects. Remove the '#' below if building a library.
+# Cargo.lock
+
+# Generated output
+hosts.txt
+ 
+# Local configuration (copy from config.toml.example)
+config.toml

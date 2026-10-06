@@ -1,0 +1,4 @@
+# Normalize line endings: text files are stored with LF in the repository and
+# checked out with LF on every OS (also for contributors on Windows who don't
+# run the pre-commit hook).
+* text=auto eol=lf

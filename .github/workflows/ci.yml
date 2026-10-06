@@ -1,0 +1,107 @@
+name: CI
+
+# Jobs default to read-only. Only the push-only formatter job needs to commit.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Auto-fix formatting on pushes, isolated from jobs that run project code.
+  format-and-commit:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Lint and fix Markdown
+        uses: rvben/rumdl@v0.2.78
+        with:
+          command: fmt
+
+      - name: Run cargo fmt
+        run: cargo fmt --all
+
+      - name: Commit and push formatting fixes
+        run: |
+          export GIT_MERGE_AUTOEDIT=no
+          export GIT_TERMINAL_PROMPT=0
+          BRANCH_NAME="${GITHUB_REF_NAME}"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Auto-fix formatting (cargo fmt)"
+            git pull --rebase --no-edit origin "$BRANCH_NAME"
+            git push origin "HEAD:refs/heads/$BRANCH_NAME"
+          else
+            echo "No formatting changes to commit."
+          fi
+
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # The toolchain is part of the cache key: a new pinned version must not
+          # reuse artifacts compiled by the previous one.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --verbose
+
+      - name: Run doc tests
+        run: cargo test --locked --doc
+
+  # Skip Docker builds on pull requests to save CI minutes.
+  docker-build:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker Image with GHA Cache
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: adblock2mikrotik_rust:ci-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image — binary runs, no network
+        run: |
+          docker run --rm --network none adblock2mikrotik_rust:ci-test --version
