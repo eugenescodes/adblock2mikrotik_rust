@@ -145,9 +145,9 @@ After running either option, `hosts.txt` is created in the current directory.
 ### Add adlist via URL
 
 ```routeros
-/ip/dns/adlist add
-url=https://eugenescodes.github.io/adblock2mikrotik_rust/hosts.txt
-ssl-verify=no
+/ip/dns/adlist add \
+    url=https://eugenescodes.github.io/adblock2mikrotik_rust/hosts.txt \
+    ssl-verify=no
 ```
 
 ### Optional: enable SSL verification
