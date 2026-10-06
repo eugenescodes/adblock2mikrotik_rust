@@ -157,10 +157,13 @@ If you want to use `ssl-verify=yes`, you can download and import
 commands:
 
 ```routeros
-/tool fetch url=https://curl.se/ca/cacert.pem /certificate import
-file-name=cacert.pem passphrase="" /ip/dns/adlist add
-url=https://eugenescodes.github.io/adblock2mikrotik_rust/hosts.txt
-ssl-verify=yes
+/tool fetch url=https://curl.se/ca/cacert.pem
+
+/certificate import file-name=cacert.pem passphrase=""
+
+/ip/dns/adlist add \
+    url=https://eugenescodes.github.io/adblock2mikrotik_rust/hosts.txt \
+    ssl-verify=yes
 ```
 
 ### Add adlist from local file
