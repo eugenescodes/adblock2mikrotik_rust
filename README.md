@@ -95,9 +95,9 @@ Command-line options take precedence over both.
 Examples:
 
 ```bash
-cargo run --release -- --config my-lists.toml --output /tmp/blocklist.txt cargo
-run --release -- --dry-run -c new.toml # check a new config: are all sources
-reachable, how many domains? cargo run --release -- -q # quiet, e.g. for cron
+cargo run --release -- --config my-lists.toml --output /tmp/blocklist.txt
+cargo run --release -- --dry-run -c new.toml # check a new config
+cargo run --release -- -q # quiet, e.g. for cron
 docker run --rm adblock2mikrotik_rust --help # options work with Docker too
 ```
 
