@@ -195,42 +195,18 @@ mod tests {
     use super::*;
     use adblock2mikrotik_rust::run;
     use std::fs;
-    use std::sync::OnceLock;
     use tempfile::tempdir;
-    use tokio::sync::Mutex;
-
-    // test_run_no_rules_no_file_written is the only test in this module that
-    // mutates process-wide environment variables (OUTPUT_DIR is process
-    // global, unlike everything else here). This lock guards that mutation
-    // in case a future test in this module does the same concurrently. The
-    // load_config tests below no longer need any locking or cleanup: each
-    // uses its own isolated tempdir and passes the path directly to
-    // load_config(), so there's no shared file for parallel test threads to
-    // race on.
-    //
-    // tokio::sync::Mutex (not std::sync::Mutex) is used deliberately: its
-    // guard is safe to hold across an .await point. A std Mutex guard held
-    // across run().await would trip clippy::await_holding_lock — holding an
-    // OS-level lock across an await can block the async executor's thread
-    // while other tasks wait on it, which is exactly what that lint flags.
-    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn get_env_lock() -> &'static Mutex<()> {
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     #[tokio::test]
     async fn test_run_no_rules_no_file_written() {
-        let _guard = get_env_lock().lock().await;
         let temp_dir = tempdir().unwrap();
 
-        // SAFETY: The mutex guard ensures no other test thread in this module
-        // mutates process environment variables concurrently.
+        // SAFETY: this is the only test in this binary that mutates OUTPUT_DIR.
         unsafe { std::env::set_var("OUTPUT_DIR", temp_dir.path()) };
 
         let result = run(vec![]).await;
 
-        // SAFETY: same guard as above.
+        // SAFETY: no other test in this binary reads or writes OUTPUT_DIR.
         unsafe { std::env::remove_var("OUTPUT_DIR") };
 
         // An empty source list is fatal (non-zero exit), mirroring the Python
