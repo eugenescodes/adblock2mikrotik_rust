@@ -17,10 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache cargo registry
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -75,7 +77,7 @@ jobs:
           echo "$changed" > publish-changed.txt
 
       - name: Upload generated list for Pages workflow
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hosts-publish-${{ github.run_id }}
           path: |
@@ -83,3 +85,13 @@ jobs:
             publish-changed.txt
           if-no-files-found: error
           retention-days: 1
+
+  publish:
+    needs: update-hosts
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: $/.github/workflows/publish-hosts.yml
+    with:
+      artifact-name: hosts-publish-${{ github.run_id }}
