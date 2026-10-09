@@ -1,9 +1,5 @@
 name: Publish hosts to GitHub Pages
 
-permissions:
-  contents: read
-  actions: read
-
 on:
   workflow_call:
     inputs:
