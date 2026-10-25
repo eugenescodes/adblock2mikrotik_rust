@@ -3,7 +3,8 @@
 Convert ad-blocking filter lists to MikroTik RouterOS DNS adlist format.
 
 > [!NOTE]
-> This is a Rust rewrite of [adblock2mikrotik](https://github.com/eugenescodes/adblock2mikrotik)
+> This is a Rust rewrite of
+> [adblock2mikrotik](https://github.com/eugenescodes/adblock2mikrotik)
 
 > [!TIP]
 > Ready-to-use URL for RouterOS:
@@ -90,7 +91,8 @@ cargo run --release
 After running, `hosts.txt` is created in the current directory.
 
 `cargo run` builds the project and runs the converter. For repeated use, build
-once with `cargo build --release` and run `./target/release/adblock2mikrotik_rust`.
+once with `cargo build --release` and run
+`./target/release/adblock2mikrotik_rust`.
 
 ### Command-line options
 
@@ -107,9 +109,9 @@ adblock2mikrotik_rust [-h] [-V] [-c FILE] [-o FILE] [-n] [-q]
 | `-n`, `--dry-run` | Do everything — fetch, validate, deduplicate, report the counts — but don't write the hosts file. The exit status is the same as for a real run |
 | `-q`, `--quiet` | Only print warnings and errors |
 
-Defaults without options: sources from `./config.toml` if it exists, otherwise the
-[bundled default sources](#configuration); output to `$OUTPUT_DIR/hosts.txt` if
-`OUTPUT_DIR` is set (as in the Docker image), otherwise `./hosts.txt`.
+Defaults without options: sources from `./config.toml` if it exists, otherwise
+the [bundled default sources](#configuration); output to `$OUTPUT_DIR/hosts.txt`
+if `OUTPUT_DIR` is set (as in the Docker image), otherwise `./hosts.txt`.
 Command-line options take precedence over both.
 
 Examples:
@@ -232,8 +234,8 @@ cargo run --release
 ```
 
 The converter loads sources from `config.toml` in the current working directory.
-If that file does not exist, it falls back to the built-in defaults (the embedded
-`config.toml.example`). If `config.toml` exists but has no usable
+If that file does not exist, it falls back to the built-in defaults (the
+embedded `config.toml.example`). If `config.toml` exists but has no usable
 `[sources] urls` — malformed TOML, a value that isn't a list of URL strings, or
 an empty list — the script reports an error and exits with a non-zero status
 without writing `hosts.txt`: a typo in your own config is never silently
@@ -328,8 +330,11 @@ test, and Docker jobs check the project; they do not publish a Docker image.
 
 ## Contributing
 
-1. Open a [GitHub issue](https://github.com/eugenescodes/adblock2mikrotik_rust/issues) to discuss major changes before starting work.
-2. Fork the repo and create a feature branch: `git checkout -b feature/your-feature`
+1. Open a
+   [GitHub issue](https://github.com/eugenescodes/adblock2mikrotik_rust/issues)
+   to discuss major changes before starting work.
+2. Fork the repo and create a feature branch:
+   `git checkout -b feature/your-feature`
 3. Make your changes and run the checks in [Development](#development).
 4. Commit with a clear message and push to your fork.
 5. Open a Pull Request targeting `main` with a description of what and why.
@@ -341,7 +346,8 @@ test, and Docker jobs check the project; they do not publish a Docker image.
 
 ## Acknowledgments
 
-- [Hagezi](https://github.com/hagezi/dns-blocklists) for maintaining comprehensive filter lists
+- [Hagezi](https://github.com/hagezi/dns-blocklists) for maintaining
+  comprehensive filter lists
 - MikroTik for the DNS adlist feature in RouterOS 7.15+
 
 ---
