@@ -35,7 +35,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Lint and fix Markdown
-        uses: rvben/rumdl@19006897519812a2fdc508314b34738e5c281233 # v0.3.0
+        uses: rvben/rumdl@1e0f1d13c87418c31e0d59dacddd98f27a02efcc # v0.3.2
         with:
           command: fmt
 
